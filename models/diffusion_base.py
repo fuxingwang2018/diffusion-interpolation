@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import lightning as L
 from lightning.pytorch.utilities.rank_zero import rank_zero_info
 
-
+from .helpers import pack_xy
 # =========================
 # Types & small configs
 # =========================
@@ -131,29 +131,15 @@ class DiffusionBase(L.LightningModule, ABC):
     @abstractmethod
     def _compute_loss(self, cond: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         ...
-
-    # ---------- helpers ----------
-    def _pack_x(self, x: torch.Tensor) -> torch.Tensor :
-        """
-        x: (B, 2, C, H, W) or (2, C, H, W)
-        returns:
-          cond:   (B, 2*C, H, W)
-        """
-        if x.dim() == 4:
-            x = x.unsqueeze(0)
-        B, two, C, H, W = x.shape
-        if not (two == 2  ):
-            raise ValueError(f"Mismatch in (x) shapes: x={tuple(x.shape)}")
-        cond = x.reshape(B, 2 * C, H, W)
-        return cond
-
+    
+    # Helpers
     def _pack_xy(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         x: (B, 2, C, H, W) or (2, C, H, W)
         y: (B, K, C, H, W) or (K, C, H, W)
         returns:
-          cond:   (B, 2*C, H, W)
-          target: (B, K*C, H, W)
+            cond:   (B, 2*C, H, W)
+            target: (B, K*C, H, W)
         """
         if x.dim() == 4:
             x = x.unsqueeze(0)
@@ -166,7 +152,6 @@ class DiffusionBase(L.LightningModule, ABC):
         target = y.reshape(B, K * C, H, W)
         return cond, target
 
-
     def _shared_step(self, batch, stage):
         """
         batch = (x, y[, meta])
@@ -176,7 +161,7 @@ class DiffusionBase(L.LightningModule, ABC):
             x, y, meta = batch
         else:
             x, y = batch
-        cond, target = self._pack_xy(x, y)
+        cond, target = pack_xy(x, y)
         loss = self._compute_loss(cond, target)
         bs = x.size(0)
         self.log(f"{stage}_loss", loss, prog_bar=True, on_step=(stage == "train"), on_epoch=True, sync_dist=True, batch_size=bs)
