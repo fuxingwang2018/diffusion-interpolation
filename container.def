@@ -21,8 +21,6 @@ From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
     if [ -f /requirements.txt ]; then
         echo "Installing Python packages from requirements.txt..."
         python3 -m pip install --no-cache-dir -r /requirements.txt
-        cd /work
-        python3 -m pip install --no-cache-dir .
     else
         echo "No requirements.txt file found. Skipping Python package installation."
     fi
@@ -32,9 +30,9 @@ From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
     export PYTHONUNBUFFERED=1
 
 %runscript
-    echo "Starting the Python environment..."
+    echo "Testing Python Version"
     python3 --version
-    echo "Testing ion Model
+    echo "Done!"
     
 
 %labels

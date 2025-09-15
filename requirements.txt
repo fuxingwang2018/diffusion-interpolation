@@ -1,0 +1,11 @@
+mlflow
+pytorch-lightning 
+torch 
+torchmetrics 
+torchvision 
+tqdm 
+jinja2 
+lightning-utilities 
+lightning 
+omegaconf
+hydra-core

@@ -103,8 +103,8 @@ class SimpleCNN(L.LightningModule):
         acc = self.train_acc(preds, y) if stage == "train" else self.val_acc(preds, y)
 
         # ddp-safe logs
-        self.log(f"{stage}/loss", loss, prog_bar=True, on_step=(stage == "train"), on_epoch=True, sync_dist=True)
-        self.log(f"{stage}/acc", acc, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        self.log(f"{stage}_loss", loss, prog_bar=True, on_step=(stage == "train"), on_epoch=True, sync_dist=True)
+        self.log(f"{stage}_acc", acc, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
 
         # figures: accumulate val confusion matrix + misclassified samples
         if stage == "val":
@@ -198,7 +198,7 @@ class SimpleCNN(L.LightningModule):
         opt = instantiate(self.optimizer_cfg, params=self.parameters())
         if self.scheduler_cfg:
             sch = instantiate(self.scheduler_cfg, optimizer=opt)
-            return {"optimizer": opt, "lr_scheduler": {"scheduler": sch, "monitor": "val/loss"}}
+            return {"optimizer": opt, "lr_scheduler": {"scheduler": sch, "monitor": "val_loss"}}
         return opt
 
     # ---------- plotting helpers ----------
