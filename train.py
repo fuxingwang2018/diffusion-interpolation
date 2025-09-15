@@ -53,17 +53,20 @@ def main(cfg: DictConfig) -> None:
     dm = instantiate(cfg.datamodule, _recursive_=False)  
 
 
-    model = SimpleCNN(
-        in_channels=cfg.model.in_channels,
-        num_classes=cfg.model.num_classes,
-        lr=cfg.model.lr,
-        weight_decay=cfg.model.weight_decay,
-        dropout=cfg.model.dropout,
-        compile_cfg=cfg.model.compile,
-        optimizer_cfg=cfg.optimizer,
-        scheduler_cfg=cfg.get("lr_scheduler"),
-        figures=cfg.model.figures,
-    )
+    # model = SimpleCNN(
+    #     in_channels=cfg.model.in_channels,
+    #     num_classes=cfg.model.num_classes,
+    #     lr=cfg.model.lr,
+    #     weight_decay=cfg.model.weight_decay,
+    #     dropout=cfg.model.dropout,
+    #     compile_cfg=cfg.model.compile_cfg,
+    #     optimizer_cfg=cfg.optimizer,
+    #     scheduler_cfg=cfg.get("lr_scheduler"),
+    #     figures=cfg.model.figures,
+    # )
+    model = instantiate(cfg.model, _recursive_=False, _convert_="partial",
+        optimizer_cfg=cfg.get("optimizer", None),
+        scheduler_cfg=cfg.get("lr_scheduler"), None,
 
     # --------- logger & callbacks ----------
     logger = instantiate(cfg.logger)
