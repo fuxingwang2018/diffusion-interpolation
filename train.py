@@ -1,21 +1,26 @@
 from __future__ import annotations
 import os
+import sys
+from pathlib import Path
 import warnings
+
 import torch
 import lightning as L
 from omegaconf import DictConfig, OmegaConf
 from hydra import main as hydra_main
 from hydra.utils import instantiate
-from models.simple_cnn import SimpleCNN
-from data.mnist_datamodule import MNISTDataModule
-from lightning.pytorch.callbacks import TQDMProgressBar
 
 from lightning.pytorch.utilities.rank_zero import rank_zero_only, rank_zero_info
 import torch.distributed as dist
 import logging
 
+from models.simple_cnn import SimpleCNN
+
+
 LOGGER = logging.getLogger("trainer")
- 
+# add project root to sys.path dynamically
+PROJECT_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 
 rank=-1
@@ -44,16 +49,10 @@ def main(cfg: DictConfig) -> None:
     except Exception:
         pass
 
-    # --------- data & model ----------
-    dm = MNISTDataModule(
-        root=cfg.data.root,
-        batch_size=cfg.data.batch_size,
-        num_workers=cfg.data.num_workers,
-        pin_memory=cfg.data.pin_memory,
-        val_split=cfg.data.val_split,
-        download=cfg.data.download,
-    )
-    
+
+    dm = instantiate(cfg.datamodule, _recursive_=False)  
+
+
     model = SimpleCNN(
         in_channels=cfg.model.in_channels,
         num_classes=cfg.model.num_classes,
@@ -74,7 +73,7 @@ def main(cfg: DictConfig) -> None:
 
     # --------- train ----------
     rank_zero_info(OmegaConf.to_yaml(cfg, resolve=True))
-    trainer.fit(model, datamodule=dm)
+    trainer.fit(model, datamodule=dm, ckpt_path=cfg.get("ckpt_path", None))
 
 
 if __name__ == "__main__":

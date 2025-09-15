@@ -26,13 +26,11 @@ srun apptainer exec \
     --nv \
     --containall \
     --bind ../test-diffusion-interp:/work \
-    --bind /dev/shm:/dev/shm \
     --bind $DATA_DIR/samples:/data \
     --bind .:/code \
     $SIF_FILE \
     bash -c "
         set -e
         cd /code
-        nvidia-smi
         python train.py
     "
