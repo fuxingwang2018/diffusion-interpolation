@@ -1,0 +1,48 @@
+Bootstrap: docker
+From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+
+
+
+%setup
+    mkdir -p /aimet
+#    rsync -av --exclude='checkpoints/' --exclude='docs/'  --exclude='.git/'  --exclude='.venv/' --exclude='*.pyc' --exclude='venv/' ./  /aimet/
+
+
+%files
+    $HASH_FILE /apptainer.hash
+    ./requirements.txt /requirements.txt
+    ./ /container-aimet
+
+#TODO: needs more work
+%post
+    set -e
+    echo "Upgrading pip and installing Python dependencies..."
+    python3 -m pip install --upgrade pip setuptools wheel
+
+    # Check if requirements.txt is provided and install packages
+    if [ -f /requirements.txt ]; then
+        echo "Installing Python packages from requirements.txt..."
+        python3 -m pip install --no-cache-dir -r /requirements.txt
+        cd /container-aimet
+        python3 -m pip install --no-cache-dir .
+    else
+        echo "No requirements.txt file found. Skipping Python package installation."
+    fi
+
+%environment
+    export PATH=/usr/local/bin:$PATH
+    export PYTHONUNBUFFERED=1
+
+%runscript
+    echo "Starting the Python environment..."
+    python3 --version
+    echo "Testing ion Model
+    
+
+%labels
+    Author Daniel Yazgi
+    Version 1.0
+    Description "Python environment with dependencies."
+
+
+
