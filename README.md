@@ -1,6 +1,37 @@
 # Difuusion Interpolation
 
 
+## Generate the dataset
+
+```bash
+# Sample labels.csv
+#Name,Importance,PosX,PosY,Date,LeadTime,Member
+# 2023/01/01/00/2023010100_lt00_mem000.npy,1,256,256,2023-01-01T00:00:00Z,0,0
+# 2023/01/01/00/2023010100_lt00_mem001.npy,1,256,256,2023-01-01T00:00:00Z,0,1
+# 2023/01/01/00/2023010100_lt00_mem002.npy,1,256,256,2023-01-01T00:00:00Z,0,2
+# 2023/01/01/00/2023010100_lt00_mem003.npy,1,256,256,2023-01-01T00:00:00Z,0,3
+# 2023/01/01/00/2023010100_lt00_mem004.npy,1,256,256,2023-01-01T00:00:00Z,0,4
+
+module load env/release/2024.1
+module load Python/3.12.3-GCCcore-13.3.0
+python tools/get_sequences_csv.py --labels labels.csv --windows 0-6,6-12,12-18 --members 0,1,2 --start-date 2023-01-01T00:00:00Z --end-date 2023-03-01T00:00:00Z --out  sequences-test.csv --extra-out  for-stats-test.csv --no-verify-fs
+
+python tools/calc_stats.py --file-list for-stats-test.csv  --root-dir samples --out stats-test.npz
+
+```
+
+### Files used for test
+All files are in dir `/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep`
+
+```
+for-stats-test.csv  
+labels.csv     
+sequences-test.csv  
+stats-test.npz
+samples/  
+```
+
+
 ## Build the image
 ```bash
 module load Apptainer/1.3.6-GCCcore-13.3.0

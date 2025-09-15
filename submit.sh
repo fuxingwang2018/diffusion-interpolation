@@ -19,13 +19,13 @@ module load Apptainer/1.3.6-GCCcore-13.3.0
 set -x 
 
 DATA_DIR=/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep/minst
-SIF_FILE=../test-diffusion-interp/container.sif 
+SIF_FILE=../containers/container.sif 
 
 export HYDRA_FULL_ERROR=1
 srun apptainer exec \
     --nv \
     --containall \
-    --bind ../test-diffusion-interp:/work \
+    --bind ./work:/work \
     --bind $DATA_DIR/samples:/data \
     --bind .:/code \
     $SIF_FILE \

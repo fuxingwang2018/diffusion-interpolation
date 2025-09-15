@@ -66,7 +66,7 @@ def main(cfg: DictConfig) -> None:
     # )
     model = instantiate(cfg.model, _recursive_=False, _convert_="partial",
         optimizer_cfg=cfg.get("optimizer", None),
-        scheduler_cfg=cfg.get("lr_scheduler"), None,
+        scheduler_cfg=cfg.get("lr_scheduler", None))
 
     # --------- logger & callbacks ----------
     logger = instantiate(cfg.logger)
