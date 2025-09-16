@@ -1,6 +1,10 @@
 # Difuusion Interpolation
 
 
+## Interactive node
+```bash
+salloc -A p200177  -p gpu --qos default -N 1 -t 1:00:00
+````
 ## Generate the dataset
 
 ```bash
@@ -14,21 +18,20 @@
 
 module load env/release/2024.1
 module load Python/3.12.3-GCCcore-13.3.0
-python tools/get_sequences_csv.py --labels labels.csv --windows 0-6,6-12,12-18 --members 0,1,2 --start-date 2023-01-01T00:00:00Z --end-date 2023-03-01T00:00:00Z --out  sequences-test.csv --extra-out  for-stats-test.csv --no-verify-fs
+python tools/get_sequences_csv.py --labels labels.csv --windows 0-6,6-12,12-18 --members 0,1,2 --start-date 2023-01-01T00:00:00Z --end-date 2023-03-01T00:00:00Z --out  sequences-test.csv --extra-out  sequences-for-stats-test.csv --no-verify-fs
 
-python tools/calc_stats.py --file-list for-stats-test.csv  --root-dir samples --out stats-test.npz
-
+python tools/calc_stats.py --file-list sequences-for-stats-test.csv  --root-dir samples --out sequences-stats-test.npz
 ```
 
 ### Files used for test
 All files are in dir `/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep`
 
 ```
-for-stats-test.csv  
-labels.csv     
-sequences-test.csv  
-stats-test.npz
-samples/  
+sequences-for-stats-test.csv
+labels.csv
+sequences-test.csv
+sequences-stats-test.npz
+samples/
 ```
 
 

@@ -217,6 +217,7 @@ def main() -> None:
     args = ap.parse_args()
 
     windows = Window.parse_many(args.windows)
+    windows = sorted(windows, key=lambda w: (w.start, w.end))
 
     members_list: Optional[List[int]] = None
     if args.members:
