@@ -1,3 +1,3 @@
 from .simple_cnn import SimpleCNN
-
-__all__=["SimpleCNN"]
+from .edm_interpolator import EDMInterpolator
+__all__=["SimpleCNN", "EDMInterpolator"]

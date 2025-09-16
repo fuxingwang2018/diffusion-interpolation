@@ -38,7 +38,7 @@ samples/
 ## Build the image
 ```bash
 module load Apptainer/1.3.6-GCCcore-13.3.0
-apptainer build --fakeroot ../test-diffusion-interp/container.sif  container.def
+apptainer build --fakeroot ../containers/container.sif  container.def
 ```
 
 ## Start MLFlow

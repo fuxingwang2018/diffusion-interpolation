@@ -1,5 +1,6 @@
 from __future__ import annotations
-import os
+import os, time
+from datetime import timedelta
 import sys
 from pathlib import Path
 import warnings
@@ -50,9 +51,24 @@ def main(cfg: DictConfig) -> None:
 
 
     dm = instantiate(cfg.datamodule, _recursive_=False)  
+    
+    # ####
+    # dm.prepare_data()   # safe no-op here
+    # dm.setup("fit")     # build train/val/test datasets
+    # # Train dataset
+    # train_set = dm.train_set
+    # print("Train samples:", len(train_set))
+    
+    # # One item (without DataLoader collation)
+    # x, y = train_set[0]
 
+    # print("Single sample:")
+    # print("  x:", x.shape, x.dtype)
+    # print("  y:", y.shape, y.dtype)
 
- 
+    # exit() 
+    # ####
+
     model = instantiate(cfg.model, _recursive_=False, _convert_="partial",
         optimizer_cfg=cfg.get("optimizer", None),
         scheduler_cfg=cfg.get("lr_scheduler", None))
@@ -74,5 +90,9 @@ if __name__ == "__main__":
     os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "0")
     os.environ.setdefault("NCCL_DEBUG", "INFO")
     os.environ.setdefault("PYTHONFAULTHANDLER", "1")
- 
+    start_time = time.perf_counter() 
     main()
+    end_time = time.perf_counter() 
+    elapsed = end_time - start_time
+    elapsed_td = timedelta(seconds=int(elapsed)) 
+    rank_zero_info(f"Run completed in {elapsed_td} (hh:mm:ss)")

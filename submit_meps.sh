@@ -31,5 +31,5 @@ srun apptainer exec \
     bash -c "
         set -e
         cd /code       
-        python test_meps_numpy_datamodule.py 
+        python train.py # test_meps_numpy_datamodule.py 
     "

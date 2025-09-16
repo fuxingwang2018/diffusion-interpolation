@@ -56,9 +56,12 @@ def main(cfg: DictConfig) -> None:
     
     # One item (without DataLoader collation)
     x, y = train_set[0]
+
     print("Single sample:")
     print("  x:", x.shape, x.dtype)
     print("  y:", y.shape, y.dtype)
+
+    print(torch.min(x), torch.max(x), torch.mean(x), torch.std(x))
 
 if __name__ == "__main__":
     # Common env for NCCL stability in some multi-GPU clusters

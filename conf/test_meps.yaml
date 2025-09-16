@@ -35,11 +35,11 @@ datamodule:
   stack_member_on_channel: true                     # (ensemble only) keep member dim
 
   # Normalization
-  normalize: none                                    # none | zscore | symrange
+  normalize: symrange                                    # none | zscore | symrange
   stats_npz: /data/sequences-stats-test.npz
   mean_key: mean
   std_key: std
-  average_key: global_average                        # if using symrange
+  average_key: global_mean                        # if using symrange
   global_min_key: global_min
   global_max_key: global_max
   norm_const: 0.95
@@ -63,33 +63,33 @@ datamodule:
 
 
 model:
-  in_channels: 1
-  num_classes: 10
-  lr: 3e-4
-  weight_decay: 1e-4
-  dropout: 0.1
-  compile_cfg:
-    enabled: false
-    mode: reduce-overhead
-    backend: inductor
-  figures:
-    log_confusion_matrix: true
-    log_per_class_error: true
-    log_misclassified_grid: true
-    max_misclassified: 36
-  _target_: models.SimpleCNN
-  
+  _target_: models.EDMInterpolator
+  extra_coord_channels: true
+  extra_phys_time_scalar: null
+  unet_base: 64
+  time_embed_dim: 256
+  sigma_data: 0.5
+  sigma_min: 0.002
+  sigma_max: 80.0
+  p_mean: -1.2
+  p_std: 1.2
+  loss_weighting: edm
+  sample_steps: 30
+  rho: 7.0
+  sample_every_val: 1
+  sample_save_npz: false
+
+  cond_channels: 6  #To learn how to compute cond_ch and targ_ch, see docs/model_channles.md, 
+  target_channels: 15
+
 optimizer:
-  _target_: torch.optim.AdamW
-  lr: ${model.lr}
-  weight_decay: ${model.weight_decay}
-
-# set to null to disable scheduler
-lr_scheduler:
-  _target_: torch.optim.lr_scheduler.StepLR
-  step_size: 3
-  gamma: 0.5
-
+    _target_: torch.optim.AdamW
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+scheduler:
+    _target_: torch.optim.lr_scheduler.ExponentialLR
+    gamma: 0.9999
+   
 # Use MLflow as the primary logger
 logger:
   _target_: lightning.pytorch.loggers.MLFlowLogger

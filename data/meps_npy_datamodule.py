@@ -120,23 +120,40 @@ class Normalizer:
         global_min_key: str = "global_min",
         global_max_key: str = "global_max",
         norm_const: float = 1.0,
+        channel_indices: Optional[Sequence[int]] = None,
     ) -> None:
         self.mode = mode
         self.norm_const = float(norm_const)
         self.arr_mean = self.arr_std = None
         self.arr_avg = self.arr_gmin = self.arr_gmax = None
+        self.chan_idx = list(channel_indices) if channel_indices is not None else None
+
+
 
         if self.mode != "none":
             if stats_npz is None:
                 raise ValueError(f"normalize='{self.mode}' requires stats_npz")
             stats = np.load(stats_npz, allow_pickle=False)
+
+            def _maybe_slice(arr: np.ndarray) -> np.ndarray:
+                arr = np.asarray(arr)
+                if self.chan_idx is None:
+                    return arr
+                # slice along leading channel dim if compatible
+                if arr.ndim == 1 and arr.shape[0] >= max(self.chan_idx)+1:
+                    return arr[self.chan_idx]
+                if arr.ndim == 3 and arr.shape[0] >= max(self.chan_idx)+1:
+                    return arr[self.chan_idx, ...]
+                # (scalar) or (H,W) or already per-selected (C==len(chan_idx)) → leave as-is
+                return arr
+
             if self.mode == "zscore":
-                self.arr_mean = np.asarray(stats[mean_key])
-                self.arr_std = np.asarray(stats[std_key])
+                self.arr_mean = _maybe_slice(stats[mean_key])
+                self.arr_std = _maybe_slice(stats[std_key])
             elif self.mode == "symrange":
-                self.arr_avg  = np.asarray(stats[average_key])
-                self.arr_gmin = np.asarray(stats[global_min_key])
-                self.arr_gmax = np.asarray(stats[global_max_key])
+                self.arr_avg  = _maybe_slice(stats[average_key])
+                self.arr_gmin = _maybe_slice(stats[global_min_key])
+                self.arr_gmax = _maybe_slice(stats[global_max_key])
 
     def _bcast(self, ref: np.ndarray, arr: np.ndarray) -> np.ndarray:
         # try broadcast as-is
@@ -236,6 +253,7 @@ class MEPSWindowDataset(Dataset):
             mean_key=mean_key, std_key=std_key,
             average_key=average_key, global_min_key=global_min_key,
             global_max_key=global_max_key, norm_const=norm_const,
+            channel_indices=self.chan_idx,
         )
 
         # For "per_member", build an index mapping each dataset index to (rec_idx, member_idx)
