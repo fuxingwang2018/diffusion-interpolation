@@ -12,10 +12,8 @@ from hydra import main as hydra_main
 from hydra.utils import instantiate
 
 from lightning.pytorch.utilities.rank_zero import rank_zero_only, rank_zero_info
-import torch.distributed as dist
 import logging
 
- 
 
 LOGGER = logging.getLogger("trainer")
 # add project root to sys.path dynamically
@@ -23,18 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
-rank=-1
-world_size=-1
-
-if dist.is_available() and dist.is_initialized():
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
-
-rank_zero_info("Cuda is enabled.")
-
-LOGGER.info(f"Hello from rank {rank}")
  
-
 
 warnings.filterwarnings("ignore", ".*does not have many workers.*")
 

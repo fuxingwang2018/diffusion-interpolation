@@ -9,6 +9,7 @@ from torch import nn
 import torch.nn.functional as F
 import lightning as L
 
+ 
 # Optional: MLflow figure/file logging
 try:
     import mlflow
@@ -328,7 +329,9 @@ class EDMInterpolator(L.LightningModule):
     # ------------- end-of-epoch logging -------------
 
     def on_validation_epoch_end(self) -> None:
-        print("Validation Epoch ended")
+
+  
+
         # run every N epochs on rank 0
         if (self.current_epoch + 1) % int(self.hparams.sample_every_val or 1) != 0:
             self._val_cache.clear()

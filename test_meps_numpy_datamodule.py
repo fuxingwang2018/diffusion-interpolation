@@ -21,17 +21,9 @@ LOGGER = logging.getLogger("trainer")
 rank=-1
 world_size=-1
 
-if dist.is_available() and dist.is_initialized():
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
-
-rank_zero_info("Cuda is enabled.")
-
-LOGGER.info(f"Hello from rank {rank}")
- 
 
 
-warnings.filterwarnings("ignore", ".*does not have many workers.*")
+#warnings.filterwarnings("ignore", ".*does not have many workers.*")
 
 @hydra_main(config_path="conf", config_name="config", version_base="1.3")
 def main(cfg: DictConfig) -> None:

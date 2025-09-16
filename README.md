@@ -79,4 +79,20 @@ srun --ntasks=4 --gpus-per-task=1  apptainer exec \
     "
 ```
 
+## To not use the container
+- Create the environment
+```bash
+module load env/release/2024.1
+module load Python/3.12.3-GCCcore-13.3.0 
+python -m venv .venv 
+source .venv/bin/activate
+pip3 install --upgrade pip
+pip3 install -r requirements.txt
+``` 
+
+- To run the training
+it will automatically link the config file (check the script)
+```bash
+sbatch submit_meps_ddp.sh
+```
 

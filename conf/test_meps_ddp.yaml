@@ -1,0 +1,119 @@
+# Hydra 1.3+ config
+seed: 42
+#ckpt_path: work/last.ckpt  #Use epoch=...-val_loss=...ckpt if you want the best model by metric.
+data_dir: /home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep
+
+trainer:
+  accelerator: gpu
+  devices: 1 #  4 for ddp_spawn and 1 for ddp
+  strategy: ddp # single_device #ddp
+  precision: 16-mixed
+  max_epochs: 2
+  log_every_n_steps: 2
+  deterministic: false
+  num_nodes: 1
+  accumulate_grad_batches: 1  # Effective batch size = per_gpu_batch_size * accumulate_grad_batches * num_gpus * num_nodes.
+  gradient_clip_val: 1.0 # If the norm of all gradients exceeds 1.0, scale them down so the norm = 1.0. This keeps updates stable (common in RNNs, transformers, unstable optimizers).
+  enable_progress_bar: false
+
+datamodule:
+  _target_: data.MEPSNPYDataModule
+  
+  # Data
+  root: ${data_dir}/samples
+  sequences_csv: ${data_dir}/sequences-test.csv            # grouped CSV with JSON columns
+
+  # Which members / leads to include (null = all present in CSV)
+  members: null                                      # e.g. [0,1,2]
+  leads: null                                        # e.g. [0,1,2,3,4,5,6]
+  require_internal_targets: true                     # need at least one internal lead
+  require_all_selected_members: true                 # skip windows missing any requested member
+
+  # Sample building
+  sample_mode: per_member                              # ensemble | per_member
+  file_channel_indices: [0, 1, 2]                    # pick C channels from each (4,H,W)
+  stack_time_on_channel: true                        # fuse time into channels
+  stack_member_on_channel: true                     # (ensemble only) keep member dim
+
+  # Normalization
+  normalize: symrange                                    # none | zscore | symrange
+  stats_npz: ${data_dir}/sequences-stats-test.npz
+  mean_key: mean
+  std_key: std
+  average_key: global_mean                        # if using symrange
+  global_min_key: global_min
+  global_max_key: global_max
+  norm_const: 0.95
+
+  # Loader
+  batch_size: 32
+  num_workers: 1
+  pin_memory: true
+  shuffle_train: true
+  dtype: float32
+  mmap: true
+
+  # Split
+  split:
+    type: ratio                                      # ratio | count | none
+    train: 0.8
+    val: 0.1
+    test: 0.1
+    seed: 42
+    shuffle_before_split: false
+
+
+model:
+  _target_: models.EDMInterpolator
+  extra_coord_channels: true
+  extra_phys_time_scalar: null
+  unet_base: 64
+  time_embed_dim: 256
+  sigma_data: 0.5
+  sigma_min: 0.002
+  sigma_max: 80.0
+  p_mean: -1.2
+  p_std: 1.2
+  loss_weighting: edm
+  sample_steps: 30
+  rho: 7.0
+  sample_every_val: 1
+  sample_save_npz: false
+
+  cond_channels: 6  #To learn how to compute cond_ch and targ_ch, see docs/model_channles.md, 
+  target_channels: 15
+
+optimizer:
+    _target_: torch.optim.AdamW
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+scheduler:
+    _target_: torch.optim.lr_scheduler.ExponentialLR
+    gamma: 0.9999
+   
+# Use MLflow as the primary logger
+logger:
+  _target_: lightning.pytorch.loggers.MLFlowLogger
+  experiment_name: "mnist"
+  run_name: "run_${now:%Y%m%d_%H%M%S}"
+  tracking_uri: mlruns
+  tags:
+    project: "diffusion_interpolation"
+  # requires mlflow >= 2.8.0; if older, just remove this flag
+  synchronous: false
+
+
+callbacks:
+  - _target_: utils.GPUsAssignedCallback
+  - _target_: utils.GPUMemoryMonitorCallback
+    every_n_steps: 1
+  - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    monitor: val_loss
+    mode: min
+    save_top_k: 1
+    save_last: true
+    filename: "{epoch}-{val_loss:.3f}"
+    dirpath: work
+  - _target_: lightning.pytorch.callbacks.LearningRateMonitor
+    logging_interval: step
+  #- _target_: lightning.pytorch.callbacks.TQDMProgressBar
