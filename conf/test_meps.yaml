@@ -45,7 +45,7 @@ datamodule:
   norm_const: 0.95
 
   # Loader
-  batch_size: 64
+  batch_size: 32
   num_workers: 1
   pin_memory: true
   shuffle_train: true

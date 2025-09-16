@@ -5,3 +5,4 @@ mlruns
 __pycache__/
 outputs/
 slurm*.out
+log.log
