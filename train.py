@@ -20,6 +20,11 @@ LOGGER = logging.getLogger("trainer")
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+print("TORCH CUDA AVAILABLE:", torch.cuda.is_available())
+print("TORCH DEVICE COUNT:", torch.cuda.device_count())
+
+
+
 
  
 

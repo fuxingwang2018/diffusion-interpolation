@@ -5,7 +5,7 @@ data_dir: /home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep
 
 trainer:
   accelerator: gpu
-  devices: 1 #  4 for ddp_spawn and 1 for ddp
+  devices: 4 #  4 for ddp_spawn and 1 for ddp
   strategy: ddp # single_device #ddp
   precision: 16-mixed
   max_epochs: 2

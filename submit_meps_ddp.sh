@@ -1,15 +1,14 @@
 #!/bin/bash -l
-#SBATCH --job-name=pt-ddp
+#SBATCH --job-name=pl-ddp-slurm
 #SBATCH --account=p200177
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=4
-#SBATCH --cpus-per-task=8 
-#SBATCH --mem=0
+#SBATCH --ntasks-per-node=4       # 4 tasks -> 4 Lightning processes per node
+#SBATCH --gpus-per-task=1         # 1 GPU per process
+#SBATCH --cpus-per-task=8
 #SBATCH --time=00:30:00
 #SBATCH --qos=short
 #SBATCH -p gpu
- 
+
 
 set -euo pipefail
 
@@ -19,6 +18,8 @@ module load Python/3.12.3-GCCcore-13.3.0
  
 # activate your venv
 source .venv/bin/activate
+
+
 
 # optional allocator / comms tuning
 export OMP_NUM_THREADS=8
@@ -44,4 +45,4 @@ echo "Node sees GPUs:"
 nvidia-smi -L || true
 
 # Launch 4 *separate* processes; Slurm sets CUDA_VISIBLE_DEVICES per task automatically
-srun python3 -u train.py
+srun --gpu-bind=single:1 --cpu-bind=cores   python3 -u train.py
