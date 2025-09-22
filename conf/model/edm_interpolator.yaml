@@ -1,27 +1,44 @@
-
 _target_: models.EDMInterpolator
+
+# channels
+cond_channels: 6
+target_channels: 15
+
+# extras & UNet
 extra_coord_channels: true
 extra_phys_time_scalar: null
 unet_base: 64
 time_embed_dim: 256
+
+# EDM noise / training
 sigma_data: 0.5
 sigma_min: 0.002
 sigma_max: 80.0
 p_mean: -1.2
 p_std: 1.2
-loss_weighting: edm
+loss_weighting: edm  # or 'none'
+
+# sampling
 sample_steps: 30
 rho: 7.0
 sample_every_val: 1
-sample_save_npz: false
+sample_save_npz: true
 
-cond_channels: 6  #To learn how to compute cond_ch and targ_ch, see docs/model_channles.md, 
-target_channels: 15
+# SDEdit (off)
+sdedit_enabled: false
+sdedit_sigma: null
+
+# optimizer / scheduler
 optimizer_cfg:
-    _target_: torch.optim.AdamW
-    lr: 1.0e-4
-    weight_decay: 1.0e-4
-
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
 scheduler_cfg:
-    _target_: torch.optim.lr_scheduler.ExponentialLR
-    gamma: 0.9999
+  _target_: torch.optim.lr_scheduler.ExponentialLR
+  gamma: 0.9999
+
+# figures / files
+figures_cfg:
+  root: "work/figs"
+  use_meta_subdirs: true
+  filename_template: "{date}_{window}_m{member}"

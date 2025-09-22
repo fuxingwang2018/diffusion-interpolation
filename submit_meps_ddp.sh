@@ -1,7 +1,7 @@
 #!/bin/bash -l
 #SBATCH --job-name=pl-ddp-slurm
 #SBATCH --account=p200177
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4       # 4 tasks -> 4 Lightning processes per node
 #SBATCH --gpus-per-task=1         # 1 GPU per process
 #SBATCH --cpus-per-task=8

@@ -1,20 +1,12 @@
 from __future__ import annotations
-from typing import Optional, Tuple, List, Any
+from typing import Optional, Tuple, List, Any, Dict
 
-import io
 import math
 import warnings
 import torch
 from torch import nn
 import torch.nn.functional as F
 import lightning as L
-
- 
-# Optional: MLflow figure/file logging
-try:
-    import mlflow
-except Exception:
-    mlflow = None
 
 
 # -------------------------
@@ -37,6 +29,7 @@ def sinusoidal_embedding(t: torch.Tensor, dim: int) -> torch.Tensor:
     args = t[:, None] * freqs[None, :]
     emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
     if dim % 2 == 1:
+        import torch.nn.functional as F  # local import to avoid polluting namespace
         emb = F.pad(emb, (0, 1))
     return emb
 
@@ -117,7 +110,6 @@ class UNet2D(nn.Module):
         self.out = nn.Conv2d(base, out_ch, 3, padding=1)
 
     def forward(self, x: torch.Tensor, t_emb: torch.Tensor) -> torch.Tensor:
-        
         temb = self.time_mlp(t_emb)  # (B, emb_dim)
         h0 = self.in_conv(x)
         h1 = self.rb1(h0, temb)
@@ -179,21 +171,24 @@ class EDMInterpolator(L.LightningModule):
         # sampling
         sample_steps: int = 20,       # number of EDM steps for inference
         rho: float = 7.0,             # EDM schedule exponent
-        sample_every_val: int = 1,    # generate+log samples every N val epochs
+        sample_every_val: int = 1,    # generate+save samples every N val epochs
         sample_save_npz: bool = False,
 
-        # figure logging
+        # figure saving (from Hydra config)
+        figures_cfg: Optional[dict] = None,
+        # Back-compat alias (ignored if figures_cfg is provided):
         figures: Optional[dict] = None,
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=["optimizer_cfg", "scheduler_cfg", "figures"])
+        # keep optimizer/scheduler configs out of saved hparams payload
+        self.save_hyperparameters(ignore=["optimizer_cfg", "scheduler_cfg", "figures_cfg", "figures"])
         self.optimizer_cfg = optimizer_cfg or {}
         self.scheduler_cfg = scheduler_cfg
-        self.fig_cfg = figures or {}
+        self.fig_cfg: Dict[str, Any] = figures_cfg or figures or {}
 
         self.cond_channels = int(cond_channels)
         self.target_channels = int(target_channels)
- 
+
         # extras
         self.add_coords = bool(extra_coord_channels)
         self.phys_time_scalar = extra_phys_time_scalar
@@ -209,7 +204,92 @@ class EDMInterpolator(L.LightningModule):
                            base=unet_base, emb_dim=time_embed_dim)
 
         # cache for val sampling
-        self._val_cache: List[Tuple[torch.Tensor, torch.Tensor]] = []
+        self._val_cache: List[Tuple[torch.Tensor, torch.Tensor, Optional[dict]]] = []
+
+    # -------- figure/path helpers (UPDATED for new meta keys) --------
+    def _fig_root(self) -> str:
+        return str((self.fig_cfg.get("root") if isinstance(self.fig_cfg, dict) else None) or "figures")
+
+    def _bool(self, key: str, default: bool) -> bool:
+        try:
+            return bool(self.fig_cfg.get(key, default))
+        except Exception:
+            return default
+
+    def _safe_str(self, x) -> str:
+        import re
+        s = str(x)
+        return re.sub(r"[^A-Za-z0-9_.-]+", "_", s)[:128] or "na"
+
+    def _select_first_meta(self, meta_in):
+        """
+        Robustly get one metadata dict from:
+         - dict (possibly dict-of-lists, as in default collate)
+         - list[dict]
+         - None
+        """
+        if meta_in is None:
+            return {}
+        if isinstance(meta_in, dict):
+            out = {}
+            for k, v in meta_in.items():
+                if isinstance(v, (list, tuple)) and len(v) > 0:
+                    out[k] = v[0]
+                else:
+                    out[k] = v
+            return out
+        if isinstance(meta_in, (list, tuple)) and meta_in and isinstance(meta_in[0], dict):
+            return meta_in[0]
+        return {}
+
+    def _build_stem_from_meta(self, meta: dict) -> str:
+        """
+        Build filename stem from the *new* meta keys:
+        - date, window
+        - member (or member_index)
+        - lead_times (list)
+        - rec_index
+        """
+        # Optional template override
+        tmpl = self.fig_cfg.get("filename_template") if isinstance(self.fig_cfg, dict) else None
+        if tmpl:
+            class _D(dict):
+                def __missing__(self, k): return "na"
+            try:
+                return self._safe_str(tmpl.format_map(_D(meta)))
+            except Exception:
+                pass
+
+        parts = []
+        if "date" in meta:          parts.append(f"date={self._safe_str(meta['date'])}")
+        if "window" in meta:        parts.append(f"window={self._safe_str(meta['window'])}")
+        if "member" in meta:        parts.append(f"member={self._safe_str(meta['member'])}")
+        elif "member_index" in meta:parts.append(f"midx={self._safe_str(meta['member_index'])}")
+        if "lead_times" in meta:
+            try:
+                lt = meta["lead_times"]
+                if isinstance(lt, (list, tuple)) and lt:
+                    parts.append("leads=" + "-".join(self._safe_str(x) for x in lt))
+            except Exception:
+                pass
+        if "rec_index" in meta:     parts.append(f"rec={self._safe_str(meta['rec_index'])}")
+        return "_".join(parts) or "sample"
+
+    def _meta_subdir(self, meta: dict) -> str:
+        """
+        Optional hierarchical subdir: date/window/member (new meta keys).
+        """
+        if not self._bool("use_meta_subdirs", True):
+            return ""
+        bits = []
+        for key in ("date", "window", "member"):
+            if key in meta:
+                bits.append(f"{key}={self._safe_str(meta[key])}")
+        return "/".join(bits)
+
+    def _ensure_dir(self, path: str) -> None:
+        import os
+        os.makedirs(path, exist_ok=True)
 
     # ------------- EDM core utilities -------------
 
@@ -251,11 +331,8 @@ class EDMInterpolator(L.LightningModule):
         y_noisy: (B, Cy, H, W), x_cond: (B, Cx, H, W), sigma: (B,)
         returns: eps_hat (B, Cy, H, W)
         """
-        # time embedding uses log sigma for scale invariance
-        # use the first layer's input dim from the UNet time MLP
         time_embed_dim = self.unet.time_mlp[0].in_features
         t_emb = sinusoidal_embedding(sigma.log(), time_embed_dim)  # (B, time_embed_dim)
-
         extras = self.add_extras(y_noisy)                          # (B, Cextra, H, W)
         inp = torch.cat([y_noisy, x_cond, extras], dim=1)          # concat along channels
         return self.unet(inp, t_emb)
@@ -263,34 +340,32 @@ class EDMInterpolator(L.LightningModule):
     # ------------- training / validation -------------
     def _shared_step(self, batch: Any, stage: str):
         """
-        batch = (x_cond, y_clean)
-          x_cond: endpoints (B, Cx, H, W)
-          y_clean: internals (B, Cy, H, W)
+        batch = (x_cond, y_clean[, meta])  # meta is optional
         """
-        x_cond, y_clean = batch
+        meta = None
+        if isinstance(batch, (list, tuple)) and len(batch) == 3:
+            x_cond, y_clean, meta = batch
+        else:
+            x_cond, y_clean = batch
+
         B = y_clean.shape[0]
-
-        sigma = self.sample_sigmas_train(B)                             # (B,)
+        sigma = self.sample_sigmas_train(B)
         noise = torch.randn_like(y_clean)
-        y_noisy = y_clean + noise * sigma[:, None, None, None]          # add EDM noise
+        y_noisy = y_clean + noise * sigma[:, None, None, None]
 
-        # predict noise
         eps_hat = self(y_noisy, x_cond, sigma)
 
-        # loss (EDM weighting ~ sigma^2; set 'none' for plain MSE)
         if self.hparams.loss_weighting == "edm":
             w = (sigma ** 2)[:, None, None, None]
             loss = F.mse_loss(eps_hat * w.sqrt(), noise * w.sqrt(), reduction="mean")
         else:
             loss = F.mse_loss(eps_hat, noise, reduction="mean")
 
-        # DDP-safe log
         self.log(f"{stage}_loss", loss, prog_bar=True, on_step=(stage == "train"), on_epoch=True, sync_dist=True)
 
-        # cache small batch for sampling viz at epoch end (validation only)
         if stage == "val" and len(self._val_cache) < 1:
-            self._val_cache.append((x_cond.detach(), y_clean.detach()))
-
+            # keep meta (could be dict, list[dict], or dict-of-lists after collate)
+            self._val_cache.append((x_cond.detach(), y_clean.detach(), meta))
         return loss
 
     def training_step(self, batch, batch_idx):  # noqa: ARG002
@@ -325,13 +400,10 @@ class EDMInterpolator(L.LightningModule):
                 y = x0_hat + sigmas[i + 1] * eps
         return y
 
-    # ------------- end-of-epoch logging -------------
+    # ------------- end-of-epoch saving (UPDATED to use new meta) -------------
 
     def on_validation_epoch_end(self) -> None:
-
-  
-
-        # run every N epochs on rank 0
+        # frequency / rank guard
         if (self.current_epoch + 1) % int(self.hparams.sample_every_val or 1) != 0:
             self._val_cache.clear()
             return
@@ -341,18 +413,28 @@ class EDMInterpolator(L.LightningModule):
         if not self._val_cache:
             return
 
-        x_cond, y_gt = self._val_cache[0]
+        cached = self._val_cache[0]
+        if len(cached) == 3:
+            x_cond, y_gt, meta_in = cached
+        else:
+            x_cond, y_gt = cached[:2]
+            meta_in = None
+
+        # normalize to a single dict with keys like:
+        # date, window, lead_times, members | member/member_index, start_valid_time, end_valid_time, rec_index
+        meta = self._select_first_meta(meta_in)
+
         x_cond = x_cond.to(self.device)
         y_gt = y_gt.to(self.device)
         y_pred = self.sample_from_cond(x_cond, shape_target=y_gt.shape[1:4])
 
-        # --- build figure grid (first few channels) ---
+        # ---- plotting ----
         try:
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
         except Exception as e:
-            warnings.warn(f"Matplotlib not available for logging: {e}")
+            warnings.warn(f"Matplotlib not available for saving figures: {e}")
             self._val_cache.clear()
             return
 
@@ -370,51 +452,63 @@ class EDMInterpolator(L.LightningModule):
             fig.tight_layout()
             return fig
 
+        # build naming & directories from new meta + config
+        import os
+        root = self._fig_root()
+        stem = self._build_stem_from_meta(meta)
+        subdir = self._meta_subdir(meta)
+        local_dir = os.path.join(root, subdir) if subdir else root
+        self._ensure_dir(local_dir)
+
+        # final local paths (filenames reflect new meta fields)
+        png_cond = os.path.join(local_dir, f"{stem}__cond.png")
+        png_pred = os.path.join(local_dir, f"{stem}__pred.png")
+        png_gt   = os.path.join(local_dir, f"{stem}__gt.png")
+        npz_path = os.path.join(local_dir, f"{stem}__sample_e{self.current_epoch:04d}.npz")
+
+        # titles augmented with light meta (new keys)
+        title_bits = []
+        for k in ("date", "window", "member", "member_index"):
+            if k in meta:
+                title_bits.append(f"{k}={meta[k]}")
+        if "lead_times" in meta and isinstance(meta["lead_times"], (list, tuple)) and len(meta["lead_times"]) > 0:
+            title_bits.append(f"leads={meta['lead_times']}")
+        title_suffix = (" (" + ", ".join(map(str, title_bits)) + ")") if title_bits else ""
+
         figs = [
-            ("figures/val_cond_endpoints.png", _grid(x_cond, "cond endpoints")),
-            ("figures/val_pred_internals.png", _grid(y_pred, "pred internals")),
-            ("figures/val_gt_internals.png", _grid(y_gt, "gt internals")),
+            (png_cond, _grid(x_cond, "cond endpoints" + title_suffix)),
+            (png_pred, _grid(y_pred, "pred internals" + title_suffix)),
+            (png_gt,   _grid(y_gt,   "gt internals"   + title_suffix)),
         ]
 
-        # Log to MLflow if configured via Lightning logger
-        from lightning.pytorch.loggers import MLFlowLogger
-        if isinstance(self.logger, MLFlowLogger) and mlflow is not None:
-            run_id = self.logger.run_id
-            try:
-                with mlflow.start_run(run_id=run_id):
-                    for path, fig in figs:
-                        buf = io.BytesIO()
-                        fig.savefig(buf, format="png", bbox_inches="tight")
-                        buf.seek(0)
-                        mlflow.log_figure(fig, path)
-                        import matplotlib.pyplot as plt
-                        plt.close(fig)
+        # save PNGs
+        try:
+            for path, fig in figs:
+                fig.savefig(path, dpi=120, bbox_inches="tight")
+                import matplotlib.pyplot as plt
+                plt.close(fig)
+        except Exception as e:
+            warnings.warn(f"Saving figures failed: {e}")
 
-                    if self.hparams.sample_save_npz:
-                        import numpy as np
-                        npz_bytes = io.BytesIO()
-                        np.savez_compressed(
-                            npz_bytes,
-                            cond=x_cond[0].detach().cpu().numpy(),
-                            pred=y_pred[0].detach().cpu().numpy(),
-                            gt=y_gt[0].detach().cpu().numpy(),
-                        )
-                        npz_bytes.seek(0)
-                        # write BytesIO to a temp file and log
-                        tmp_path = self._bytes_to_tempfile(npz_bytes, f"samples_epoch_{self.current_epoch:04d}.npz")
-                        mlflow.log_artifact(tmp_path, artifact_path="samples")
+        # save NPZ (optional)
+        if bool(self.hparams.sample_save_npz):
+            try:
+                import numpy as np
+                np.savez_compressed(
+                    npz_path,
+                    cond=x_cond[0].detach().cpu().numpy(),
+                    pred=y_pred[0].detach().cpu().numpy(),
+                    gt=y_gt[0].detach().cpu().numpy(),
+                    # tiny meta snapshot for traceability
+                    date=str(meta.get("date")),
+                    window=str(meta.get("window")),
+                    member=str(meta.get("member", meta.get("member_index", ""))),
+                    rec_index=int(meta.get("rec_index")) if "rec_index" in meta else -1,
+                )
             except Exception as e:
-                warnings.warn(f"MLflow logging failed: {e}")
+                warnings.warn(f"Saving NPZ failed: {e}")
 
         self._val_cache.clear()
-
-    def _bytes_to_tempfile(self, b: io.BytesIO, name: str) -> str:
-        import tempfile, os
-        tmpdir = tempfile.mkdtemp()
-        path = os.path.join(tmpdir, name)
-        with open(path, "wb") as f:
-            f.write(b.read())
-        return path
 
     # ------------- optimizers -------------
     def configure_optimizers(self):
@@ -424,12 +518,11 @@ class EDMInterpolator(L.LightningModule):
             opt = instantiate(self.optimizer_cfg, params=self.parameters())
         else:
             raise ValueError("no hydra optimizer target")
- 
+
         if self.scheduler_cfg:
             try:
-                from hydra.utils import instantiate as _inst
-                sch = _inst(self.scheduler_cfg, optimizer=opt)
-                return {"optimizer": opt, "lr_scheduler": {"scheduler": sch, "monitor": "val_loss"}}
+                sch = instantiate(self.scheduler_cfg, optimizer=opt)
+                return {"optimizer": opt, "lr_scheduler": sch}
             except Exception:
                 return opt
         return opt

@@ -1,4 +1,4 @@
-_data_dir: /home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep
+_data_dir: ${oc.env:DATA_DIR,/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep}
 
 
 defaults:
@@ -19,7 +19,7 @@ seed: 42
 # Use MLflow as the primary logger
 logger:
   _target_: lightning.pytorch.loggers.MLFlowLogger
-  experiment_name: "mnist"
+  experiment_name: "meps"
   run_name: "run_${now:%Y%m%d_%H%M%S}"
   tracking_uri: mlruns
   tags:

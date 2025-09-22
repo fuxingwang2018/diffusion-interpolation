@@ -97,3 +97,24 @@ it will automatically link the config file (check the script)
 sbatch submit_meps_ddp.sh
 ```
 
+## Develpment run 
+```bash
+module load env/release/2024.1
+module load Apptainer/1.3.6-GCCcore-13.3.0
+
+DATA_DIR=/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep
+SIF_FILE=../containers/container.sif 
+apptainer exec \
+    --nv \
+    --containall \
+    --bind .:/code \
+    --bind ../work/exp-01:/work \
+    --bind $DATA_DIR/:/data \
+    $SIF_FILE \
+    bash -c "
+        set -e
+        cd /code
+        export DATA_DIR=/data
+        python train.py
+    "
+```
