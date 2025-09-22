@@ -193,8 +193,7 @@ class EDMInterpolator(L.LightningModule):
 
         self.cond_channels = int(cond_channels)
         self.target_channels = int(target_channels)
-        self.fallback_lr = float(lr)
-
+ 
         # extras
         self.add_coords = bool(extra_coord_channels)
         self.phys_time_scalar = extra_phys_time_scalar
@@ -420,16 +419,12 @@ class EDMInterpolator(L.LightningModule):
     # ------------- optimizers -------------
     def configure_optimizers(self):
         """Hydra-friendly optimizer creation with a safe fallback."""
-        try:
-            from hydra.utils import instantiate
-            if isinstance(self.optimizer_cfg, dict) and "_target_" in self.optimizer_cfg:
-                opt = instantiate(self.optimizer_cfg, params=self.parameters())
-            else:
-                raise ValueError("no hydra optimizer target")
-        except Exception:
-            # Safe fallback
-            opt = torch.optim.Adam(self.parameters(), lr=self.fallback_lr)
-
+        from hydra.utils import instantiate
+        if isinstance(self.optimizer_cfg, dict) and "_target_" in self.optimizer_cfg:
+            opt = instantiate(self.optimizer_cfg, params=self.parameters())
+        else:
+            raise ValueError("no hydra optimizer target")
+ 
         if self.scheduler_cfg:
             try:
                 from hydra.utils import instantiate as _inst

@@ -61,20 +61,24 @@ def main(cfg: DictConfig) -> None:
     # exit() 
     # ####
 
-    model = instantiate(cfg.model, _recursive_=False, _convert_="partial",
-        optimizer_cfg=cfg.get("optimizer", None),
-        scheduler_cfg=cfg.get("lr_scheduler", None))
+    model = instantiate(cfg.model, _recursive_=False, _convert_="partial")
 
     # --------- logger & callbacks ----------
     logger = instantiate(cfg.logger)
     callbacks = [instantiate(cb) for cb in cfg.get("callbacks", [])]
-
     trainer = L.Trainer(**cfg.trainer, logger=logger, callbacks=callbacks)
 
     # --------- train ----------
     rank_zero_info(OmegaConf.to_yaml(cfg, resolve=True))
+
+    start_time = time.perf_counter() 
+
     trainer.fit(model, datamodule=dm, ckpt_path=cfg.get("ckpt_path", None))
 
+    end_time = time.perf_counter() 
+    elapsed = end_time - start_time
+    elapsed_td = timedelta(seconds=int(elapsed)) 
+    rank_zero_info(f"Run completed in {elapsed_td} (hh:mm:ss)")
 
 if __name__ == "__main__":
     # Common env for NCCL stability in some multi-GPU clusters
@@ -82,9 +86,4 @@ if __name__ == "__main__":
     os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "0")
     os.environ.setdefault("NCCL_DEBUG", "INFO")
     os.environ.setdefault("PYTHONFAULTHANDLER", "1")
-    start_time = time.perf_counter() 
     main()
-    end_time = time.perf_counter() 
-    elapsed = end_time - start_time
-    elapsed_td = timedelta(seconds=int(elapsed)) 
-    rank_zero_info(f"Run completed in {elapsed_td} (hh:mm:ss)")

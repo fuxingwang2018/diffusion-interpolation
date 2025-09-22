@@ -1,0 +1,12 @@
+
+accelerator: gpu
+devices: 4 #  4 for ddp_spawn and 1 for ddp
+strategy: ddp # single_device #ddp
+precision: 16-mixed
+max_epochs: 2
+log_every_n_steps: 2
+deterministic: false
+num_nodes: 2 
+accumulate_grad_batches: 1  # Effective batch size = per_gpu_batch_size * accumulate_grad_batches * num_gpus * num_nodes.
+gradient_clip_val: 1.0 # If the norm of all gradients exceeds 1.0, scale them down so the norm = 1.0. This keeps updates stable (common in RNNs, transformers, unstable optimizers).
+enable_progress_bar: false

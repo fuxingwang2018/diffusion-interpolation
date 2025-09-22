@@ -1,6 +1,7 @@
 # Difuusion Interpolation
 
-
+## Experiments
+- See the file `docs/experiments/README.md`
 ## Interactive node
 ```bash
 salloc -A p200177  -p gpu --qos default -N 1 -t 1:00:00

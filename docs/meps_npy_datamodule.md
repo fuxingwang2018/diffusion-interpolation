@@ -286,7 +286,7 @@ datamodule:
   file_channel_indices: [0,1]
   stack_time_on_channel: true
   stack_member_on_channel: true
-  normalize: zscore
+  normalize: symrange
   stats_npz: /data/stats.npz
 ```
 

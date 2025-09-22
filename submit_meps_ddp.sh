@@ -1,7 +1,7 @@
 #!/bin/bash -l
 #SBATCH --job-name=pl-ddp-slurm
 #SBATCH --account=p200177
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=4       # 4 tasks -> 4 Lightning processes per node
 #SBATCH --gpus-per-task=1         # 1 GPU per process
 #SBATCH --cpus-per-task=8
@@ -45,4 +45,4 @@ echo "Node sees GPUs:"
 nvidia-smi -L || true
 
 # Launch 4 *separate* processes; Slurm sets CUDA_VISIBLE_DEVICES per task automatically
-srun --gpu-bind=single:1 --cpu-bind=cores   python3 -u train.py
+HYDRA_FULL_ERROR=1 srun --gpu-bind=single:1 --cpu-bind=cores   python3 -u train.py
