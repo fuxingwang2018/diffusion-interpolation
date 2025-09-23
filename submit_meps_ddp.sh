@@ -5,8 +5,8 @@
 #SBATCH --ntasks-per-node=4       # 4 tasks -> 4 Lightning processes per node
 #SBATCH --gpus-per-task=1         # 1 GPU per process
 #SBATCH --cpus-per-task=8
-#SBATCH --time=00:30:00
-#SBATCH --qos=short
+#SBATCH --time=12:00:00
+#SBATCH --qos=default
 #SBATCH -p gpu
 
 

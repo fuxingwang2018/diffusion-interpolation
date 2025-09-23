@@ -3,7 +3,7 @@ _data_dir: ${oc.env:DATA_DIR,/home/users/u101329/p200177_t2/DE_371/datasets/data
 
 defaults:
   - trainer: ddp
-  - datamodule: meps_npy
+  - datamodule: meps_npy2
   - model: edm_interpolator
   - _self_
 
@@ -31,7 +31,7 @@ logger:
 callbacks:
   - _target_: utils.GPUsAssignedCallback
   - _target_: utils.GPUMemoryMonitorCallback
-    every_n_steps: 1
+    every_n_steps: 10
   - _target_: lightning.pytorch.callbacks.ModelCheckpoint
     monitor: val_loss
     mode: min

@@ -22,6 +22,16 @@ module load Python/3.12.3-GCCcore-13.3.0
 python tools/get_sequences_csv.py --labels labels.csv --windows 0-6,6-12,12-18 --members 0,1,2 --start-date 2023-01-01T00:00:00Z --end-date 2023-03-01T00:00:00Z --out  sequences-test.csv --extra-out  sequences-for-stats-test.csv --no-verify-fs
 
 python tools/calc_stats.py --file-list sequences-for-stats-test.csv  --root-dir samples --out sequences-stats-test.npz
+
+## Actual test
+python tools/get_sequences_csv.py --labels labels.csv --windows 0-6,6-12,12-18 --start-date 2023-01-01T00:00:00Z --end-date 2023-12-31T00:00:00Z --out  sequences-test2.csv --extra-out  sequences-for-stats-test2.csv --no-verify-fs
+python tools/calc_stats.py --file-list sequences-for-stats-test2.csv  --root-dir samples --out sequences-stats-test2.npz
+
+## Actual test
+python tools/get_sequences_csv.py --labels labels.csv --windows 0-6,6-12,12-18 --start-date 2023-01-01T00:00:00Z --end-date 2025-12-31T00:00:00Z --out  sequences-test3.csv --extra-out  sequences-for-stats-test3.csv --no-verify-fs
+python tools/calc_stats.py --file-list sequences-for-stats-test3.csv  --root-dir samples --out sequences-stats-test3.npz
+
+
 ```
 
 ### Files used for test

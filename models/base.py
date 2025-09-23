@@ -155,35 +155,13 @@ class DiffusionBase(L.LightningModule):
             self._val_cache.append((x_cond.detach(), y_clean.detach(), meta))
 
   # -------- plotting/saving at val end (compact names + colorbars) --------
+
+    # -------- plotting/saving at val end (compact names + colorbars) --------
     def on_validation_epoch_end(self) -> None:
-        import os, re
+        import os, re, hashlib
         import numpy as np
     
-        # ——— helpers (local to keep this method self-contained) ———
-        def _to_scalar(x):
-            # best-effort: Tensor -> item, list/tuple -> first, else as-is
-            try:
-                if hasattr(x, "item"):
-                    return x.item()
-            except Exception:
-                pass
-            if isinstance(x, (list, tuple)) and x:
-                return _to_scalar(x[0])
-            return x
-    
-        def _safe(s: str) -> str:
-            # compact + filesystem safe
-            return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(s)).strip("_")
-    
-        def _compact_date(s):
-            # turn "2023-02-18T00:00:00Z" -> "20230218T0000Z"
-            if not isinstance(s, str): 
-                return _safe(s)
-            out = s.replace(":", "").replace("-", "")
-            out = re.sub(r"(\d{8})T(\d{4})\d{2}Z", r"\1T\2Z", out)  # drop seconds if present
-            return _safe(out)
-    
-        # ——— guards ———
+        # guards
         if (self.current_epoch + 1) % int(self.hparams.sample_every_val or 1) != 0:
             self._val_cache.clear(); return
         if not getattr(self.trainer, "is_global_zero", True):
@@ -196,25 +174,57 @@ class DiffusionBase(L.LightningModule):
         meta_in = cached[2] if len(cached) > 2 else None
         meta = self._select_first_meta(meta_in)
     
-        # extract compact meta bits
-        date_raw   = meta.get("date", "na")
-        window_raw = meta.get("window", "na")
-        member_raw = meta.get("member", meta.get("member_index", "na"))
+        # --- helpers ---
+        def _to_scalar(x):
+            # Tensor -> item; list/tuple -> first; else as-is
+            try:
+                if hasattr(x, "item"):
+                    return x.item()
+            except Exception:
+                pass
+            if isinstance(x, (list, tuple)) and x:
+                return _to_scalar(x[0])
+            return x
     
-        date_key   = _compact_date(date_raw)
-        window_key = _safe(window_raw)
-        m_val      = _to_scalar(member_raw)
-        try:
-            m_str = f"m{int(m_val):03d}"
-        except Exception:
-            m_str = f"m{_safe(m_val)}"
+        def _safe(s: str) -> str:
+            return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(s)).strip("_")
+    
+        def _compact_date(s):
+            # "2023-02-18T00:00:00Z" -> "20230218T0000Z"
+            if not isinstance(s, str):
+                return _safe(s)
+            out = s.replace(":", "").replace("-", "")
+            out = re.sub(r"(\d{8})T(\d{4})\d{2}Z", r"\1T\2Z", out)  # drop seconds if present
+            return _safe(out)
+    
+        def _member_short(m):
+            # prefer integer formatting; otherwise short hash
+            m = _to_scalar(m)
+            try:
+                return f"m{int(m):03d}"
+            except Exception:
+                text = _safe(m)
+                if len(text) <= 12:
+                    return f"m{text}"
+                h = hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
+                return f"m{h}"
+    
+        # --- compact meta ---
+        date_key   = _compact_date(meta.get("date", "na"))
+        window_raw = meta.get("window", "na")
+        # allow window lists/tuples (e.g., [0,6]) -> "0-6"
+        if isinstance(window_raw, (list, tuple)) and len(window_raw) == 2:
+            window_key = f"{window_raw[0]}-{window_raw[1]}"
+        else:
+            window_key = _safe(window_raw)
+        m_str = _member_short(meta.get("member", meta.get("member_index", "na")))
     
         # tensors to device
         x_cond = x_cond.to(self.device)
         y_gt   = y_gt.to(self.device)
         y_pred = self.sample_from_cond(x_cond, shape_target=y_gt.shape[1:4])  # subclass-defined
     
-        # ——— plotting ———
+        # plotting
         try:
             import matplotlib
             matplotlib.use("Agg")
@@ -235,12 +245,12 @@ class DiffusionBase(L.LightningModule):
                 im = axes[i].imshow(t[0, i].numpy(), cmap="viridis")
                 axes[i].axis("off")
                 axes[i].set_title(f"{title} ch#{i}", fontsize=8)
-                # add per-panel colorbar (compact)
+                # per-panel colorbar
                 fig.colorbar(im, ax=axes[i], fraction=0.046, pad=0.04)
             fig.tight_layout()
             return fig
     
-        # title suffix (compact)
+        # short title suffix
         lt = meta.get("lead_times")
         lt_str = ""
         if isinstance(lt, (list, tuple)) and lt:
@@ -253,17 +263,23 @@ class DiffusionBase(L.LightningModule):
             (_grid(y_gt,   "gt internals"   + title_suffix), "gt"),
         ]
     
-        # ——— folders & compact filenames ———
+        # folders & compact filenames
         root = self._fig_root()
         local_dir = os.path.join(root, date_key, window_key, m_str)
-        self._ensure_dir(local_dir)
+        # ensure path doesn't explode: if very long, drop member subdir
+        try:
+            self._ensure_dir(local_dir)
+        except OSError:
+            # fallback: without member subdir
+            local_dir = os.path.join(root, date_key, window_key)
+            self._ensure_dir(local_dir)
     
-        # e.g. 20230218T0000Z_0-6_m003__pred.png
-        stem = f"{date_key}_{window_key}_{m_str}"
-        png_cond = os.path.join(local_dir, f"{stem}__cond.png")
-        png_pred = os.path.join(local_dir, f"{stem}__pred.png")
-        png_gt   = os.path.join(local_dir, f"{stem}__gt.png")
-        npz_path = os.path.join(local_dir, f"{stem}__e{self.current_epoch:04d}.npz")
+        # e.g. 20230218T0000Z_0-6_m003_e0001_*.png
+        stem = f"{date_key}_{window_key}_{m_str}_e{self.current_epoch:04d}"
+        png_cond = os.path.join(local_dir, f"{stem}_cond.png")
+        png_pred = os.path.join(local_dir, f"{stem}_pred.png")
+        png_gt   = os.path.join(local_dir, f"{stem}_gt.png")
+        npz_path = os.path.join(local_dir, f"{stem}.npz")
     
         # save PNGs
         try:
@@ -283,15 +299,14 @@ class DiffusionBase(L.LightningModule):
                     cond=x_cond[0].detach().cpu().numpy(),
                     pred=y_pred[0].detach().cpu().numpy(),
                     gt=y_gt[0].detach().cpu().numpy(),
-                    date=str(date_raw),
+                    date=str(meta.get("date")),
                     window=str(window_raw),
-                    member=str(m_val),
+                    member=str(_to_scalar(meta.get("member", meta.get("member_index", "na")))),
                 )
             except Exception as e:
                 warnings.warn(f"Saving NPZ failed: {e}")
     
         self._val_cache.clear()
-
 
     # -------- optimizers (Hydra-friendly) --------
     def configure_optimizers(self):
