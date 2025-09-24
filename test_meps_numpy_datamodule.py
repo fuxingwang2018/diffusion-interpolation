@@ -47,11 +47,12 @@ def main(cfg: DictConfig) -> None:
     print("Train samples:", len(train_set))
     
     # One item (without DataLoader collation)
-    x, y = train_set[0]
+    x, y, meta = train_set[0]
 
     print("Single sample:")
     print("  x:", x.shape, x.dtype)
     print("  y:", y.shape, y.dtype)
+    print("  meta:", meta)
 
     print(torch.min(x), torch.max(x), torch.mean(x), torch.std(x))
 

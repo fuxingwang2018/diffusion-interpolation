@@ -4,6 +4,7 @@ from typing import Any, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
+from lightning.pytorch.utilities.rank_zero import rank_zero_only, rank_zero_info
 
 from .base import DiffusionBase
 
@@ -158,6 +159,14 @@ class DDPMInterpolator(DiffusionBase):
         """
         batch = (x_cond, y_clean[, meta])
         """
+        try:
+             rank_zero_info(f"XXXXXXXXX Stage: {stage}")
+             rank_zero_info(x_cond.shape)
+             rank_zero_info(y_clean.shape)
+             rank_zero_info(meta)
+        except Exception as e:
+            pass
+
         meta = None
         if isinstance(batch, (list, tuple)) and len(batch) == 3:
             x_cond, y_clean, meta = batch
@@ -224,6 +233,9 @@ class DDPMInterpolator(DiffusionBase):
 
     def validation_step(self, batch, batch_idx):  # noqa: ARG002
         self._shared_step(batch, "val")
+
+    def test_step(self, batch, batch_idx):  # noqa: ARG002
+            return self._shared_step(batch, "test")
 
     # ----- helpers -----
     def _maybe_float32(self, *tensors):

@@ -131,6 +131,9 @@ class EDMInterpolator(DiffusionBase):
     def validation_step(self, batch, batch_idx):  # noqa: ARG002
         self._shared_step(batch, "val")
 
+    def test_step(self, batch, batch_idx):  # noqa: ARG002
+            return self._shared_step(batch, "test")
+
     # ----- sampling (EDM Euler) with optional SDEdit -----
     @torch.no_grad()
     def sample_from_cond(
