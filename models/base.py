@@ -26,13 +26,20 @@ class DiffusionBase(L.LightningModule):
         # UNet
         unet_base: int = 64,
         time_embed_dim: int = 256,
+        # --- NEW: attention controls forwarded to UNet2D ---
+        use_attention: bool = False,
+        attn_heads: int = 4,
+        attn_dim_head: int = 32,
+        attn_levels: Optional[Tuple[str, ...]] = ("mid",),
         # logging / saving
         sample_every_val: int = 1,
         sample_save_npz: bool = False,
         figures_cfg: Optional[dict] = None,
-        # optimization config (Hydra)
+        # optimization
         optimizer_cfg: Optional[dict] = None,
         scheduler_cfg: Optional[dict] = None,
+
+        init_with_ones: bool = False,  # for testing
     ):
         super().__init__()
         self.save_hyperparameters(ignore=["optimizer_cfg", "scheduler_cfg", "figures_cfg"])
@@ -52,10 +59,16 @@ class DiffusionBase(L.LightningModule):
         if self.add_coords: in_ch += 2
         if exists(self.phys_time_scalar): in_ch += 1
 
-        self.unet = UNet2D(in_ch=in_ch, out_ch=self.target_channels, base=unet_base, emb_dim=time_embed_dim)
-
-        # val cache: (x_cond, y_clean, optional meta)
-        self._val_cache: List[Tuple[torch.Tensor, torch.Tensor, Optional[dict]]] = []
+        self.unet = UNet2D(
+            in_ch=in_ch,
+            out_ch=self.target_channels,
+            base=unet_base,
+            emb_dim=time_embed_dim,
+            use_attention=use_attention,
+            attn_heads=attn_heads,
+            attn_dim_head=attn_dim_head,
+            attn_levels=tuple(attn_levels or ("mid",)),
+        )
 
     # -------- figure/path helpers (metadata-aware) --------
     def _fig_root(self) -> str:
@@ -153,8 +166,39 @@ class DiffusionBase(L.LightningModule):
     def _cache_val_batch(self, x_cond, y_clean, meta):
         if len(self._val_cache) < 1:
             self._val_cache.append((x_cond.detach(), y_clean.detach(), meta))
+    
+    
+    def on_load_checkpoint(self, checkpoint) -> None:
+        if self.init_with_ones:
+            self._loaded_from_ckpt = True
+    
+    @staticmethod
+    def _weight_init(m: nn.Module):
+        # Conv/Linear: Kaiming, bias=0
+        if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
+            nn.init.kaiming_normal_(m.weight, mode="fan_in", nonlinearity="relu")
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        # Norm layers: weight=1, bias=0
+        elif isinstance(m, (nn.GroupNorm, nn.LayerNorm, nn.BatchNorm2d)):
+            if m.weight is not None:
+                nn.init.ones_(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+                
+    def on_fit_start(self) -> None:
 
-  # -------- plotting/saving at val end (compact names + colorbars) --------
+            # If we didn't restore from a checkpoint, initialize weights now
+        if not getattr(self, "_loaded_from_ckpt", False):
+            self.apply(self._weight_init)
+            # Common diffusion practice: zero-init the final conv for stable starts
+            if hasattr(self.unet, "out") and isinstance(self.unet.out, nn.Conv2d):
+                nn.init.zeros_(self.unet.out.weight)
+                if self.unet.out.bias is not None:
+                    nn.init.zeros_(self.unet.out.bias)
+            self.print("[Init] Weights initialized from scratch (no checkpoint).")
+        else:
+            self.print("[Init] Restored from checkpoint; kept checkpoint weights.")
 
     # -------- plotting/saving at val end (compact names + colorbars) --------
     def on_validation_epoch_end(self) -> None:

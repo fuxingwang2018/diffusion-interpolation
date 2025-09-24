@@ -56,39 +56,19 @@ apptainer build --fakeroot ../containers/container.sif  container.def
 
 ```bash
 module load Python/3.12.3-GCCcore-13.3.0
-pip3 intall --user mlflow
+#pip3 intall --user mlflow
 python3 -m mlflow server \
   --host localhost\
   --port 5000 \
-  --backend-store-uri sqlite:///./mlruns/mlflow.db  
-   
+  --backend-store-uri file:/home/users/u101329/p200177_t2/u101329/_mlruns  
 ```
+- to fowrard the port
 
-## Run the training
 ```bash
-module load env/release/2024.1
-module load PyTorch/2.3.0-foss-2024a-CUDA-12.6.0 
-module load Apptainer/1.3.6-GCCcore-13.3.0
-
-DATA_DIR=/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep
-DATA_DIR=/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep/minst
-
-SIF_FILE=../test-diffusion-interp/container.sif 
-srun --ntasks=4 --gpus-per-task=1  apptainer exec \
-    --nv \
-    --containall \
-    --bind ../test-diffusion-interp:/work \
-    --bind /dev/shm:/dev/shm \
-    --bind $DATA_DIR/samples:/data \
-    --bind .:/code \
-    $SIF_FILE \
-    bash -c "
-        set -e
-        cd /code
-        nvidia-smi
-        python train.py
-    "
+NODE=mel0293 # the interactive node
+ssh  $NODE -L 5000:localhost:5000
 ```
+
 
 ## To not use the container
 - Create the environment
@@ -107,24 +87,34 @@ it will automatically link the config file (check the script)
 sbatch submit_meps_ddp.sh
 ```
 
-## Develpment run 
+## Development training run
 ```bash
 module load env/release/2024.1
 module load Apptainer/1.3.6-GCCcore-13.3.0
+module load git
+
 
 DATA_DIR=/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep
+ROOT_DIR=/home/users/u101329/p200177_t2/u101329/tests/exp-01
+MLFLOW_DIR=/home/users/u101329/p200177_t2/u101329/_mlruns
 SIF_FILE=../containers/container.sif 
 apptainer exec \
     --nv \
     --containall \
     --bind .:/code \
-    --bind ../work/exp-01:/work \
+    --bind $ROOT_DIR:/root_dir \
     --bind $DATA_DIR/:/data \
+    --bind $MLFLOW_DIR:/_mlruns \
     $SIF_FILE \
-    bash -c "
+    bash -c '
         set -e
         cd /code
         export DATA_DIR=/data
+        export ROOT_DIR=/root_dir
+        export WORK_DIR=$ROOT_DIR/_work
+        export MLFLOW_DIR=/_mlruns
+        [ -d $WORK_DIR ] || mkdir -p $WORK_DIR
+        [ -d $MLFLOW_DIR ] || mkdir -p $MLFLOW_DIR
         python train.py
-    "
+    '
 ```

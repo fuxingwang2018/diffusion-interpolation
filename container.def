@@ -11,7 +11,7 @@ From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
 %post
     set -e
 
-    mkdir -p /work
+    mkdir -p /_work
 
     echo "Upgrading pip and installing Python dependencies..."
 

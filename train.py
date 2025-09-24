@@ -13,6 +13,8 @@ from hydra.utils import instantiate
 
 from lightning.pytorch.utilities.rank_zero import rank_zero_only, rank_zero_info
 import logging
+from lightning.pytorch.loggers import MLFlowLogger
+from utils.log_hydra import log_cfg_to_mlflow
 
 
 LOGGER = logging.getLogger("trainer")
@@ -41,7 +43,10 @@ def main(cfg: DictConfig) -> None:
     except Exception:
         pass
 
-
+    #rank_zero_info(OmegaConf.to_yaml(cfg, resolve=True))
+    
+    
+    # --------- data & model ----------
     dm = instantiate(cfg.datamodule, _recursive_=False)  
     
     # ####
@@ -65,15 +70,41 @@ def main(cfg: DictConfig) -> None:
 
     # --------- logger & callbacks ----------
     logger = instantiate(cfg.logger)
+    log_cfg_to_mlflow(logger, cfg)
+    
+    #if isinstance(logger, MLFlowLogger):
+    #    exp_id = logger.experiment_id
+    #    rank_zero_info(f"MLflow experiment_name={logger._experiment_name}, run_id={logger.run_id}")
+    #    rank_zero_info(f"MLflow experiment_id={exp_id}, tracking_uri={logger.save_dir}")
+    #
+    #exit()
+
     callbacks = [instantiate(cb) for cb in cfg.get("callbacks", [])]
+    
     trainer = L.Trainer(**cfg.trainer, logger=logger, callbacks=callbacks)
 
     # --------- train ----------
-    rank_zero_info(OmegaConf.to_yaml(cfg, resolve=True))
 
     start_time = time.perf_counter() 
 
-    trainer.fit(model, datamodule=dm, ckpt_path=cfg.get("ckpt_path", None))
+    ckpt_path = None
+    resume_from = cfg.get("resume_from_ckpt", None)
+
+    if resume_from in ("last", "best", "file"):
+        # Look in the checkpoint callback if available
+        for cb in callbacks:
+            if isinstance(cb, L.pytorch.callbacks.ModelCheckpoint):
+                if resume_from == "last" and cb.last_model_path:
+                    ckpt_path = cb.last_model_path
+                elif resume_from == "best" and cb.best_model_path:
+                    ckpt_path = cb.best_model_path
+                elif resume_from == "file":
+                    ckpt_path = cfg.get("ckpt_path", None)
+               
+                break
+
+
+    trainer.fit(model, datamodule=dm, ckpt_path=ckpt_path)
 
     end_time = time.perf_counter() 
     elapsed = end_time - start_time

@@ -1,7 +1,9 @@
-work
+figures/
+*.pyc
+_work*
 venv
 .venv
-mlruns
+_mlruns
 __pycache__/
 outputs/
 slurm*.out

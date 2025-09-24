@@ -4,7 +4,7 @@ devices: 4 #  4 for ddp_spawn and 1 for ddp
 strategy: ddp # single_device #ddp
 precision: 16-mixed
 max_epochs: 100
-log_every_n_steps: 50
+log_every_n_steps: 1
 deterministic: false
 num_nodes: 1
 accumulate_grad_batches: 1  # Effective batch size = per_gpu_batch_size * accumulate_grad_batches * num_gpus * num_nodes.

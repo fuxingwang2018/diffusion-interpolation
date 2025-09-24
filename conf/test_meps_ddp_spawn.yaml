@@ -95,7 +95,7 @@ logger:
   _target_: lightning.pytorch.loggers.MLFlowLogger
   experiment_name: "mnist"
   run_name: "run_${now:%Y%m%d_%H%M%S}"
-  tracking_uri: ${oc.env:MLFLOW_TRACKING_URI, file:./mlruns}
+  tracking_uri: ${oc.env:MLFLOW_TRACKING_URI, file:./_mlruns}
   tags:
     project: "diffusion_interpolation"
   # requires mlflow >= 2.8.0; if older, just remove this flag

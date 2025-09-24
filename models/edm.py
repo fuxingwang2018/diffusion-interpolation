@@ -22,31 +22,55 @@ class EDMInterpolator(DiffusionBase):
         extra_phys_time_scalar: Optional[float] = None,
         unet_base: int = 64,
         time_embed_dim: int = 256,
+
+        # --- NEW: attention passthrough to DiffusionBase/UNet2D ---
+        use_attention: bool = False,
+        attn_heads: int = 4,
+        attn_dim_head: int = 32,
+        attn_levels: Optional[Tuple[str, ...]] = ("mid",),
+
         sample_every_val: int = 1,
         sample_save_npz: bool = False,
         figures_cfg: Optional[dict] = None,
         optimizer_cfg: Optional[dict] = None,
         scheduler_cfg: Optional[dict] = None,
+
         # --- EDM noise/schedule ---
         sigma_data: float = 0.5,
         sigma_min: float = 0.002,
         sigma_max: float = 80.0,
         p_mean: float = -1.2,
         p_std: float = 1.2,
-        loss_weighting: str = "edm",  # 'edm' or 'none'
+        loss_weighting: str = "edm",
         # sampling schedule
         sample_steps: int = 20,
         rho: float = 7.0,
         # --- SDEdit knobs ---
         sdedit_enabled: bool = False,
-        sdedit_sigma: Optional[float] = None,  # if None: use schedule midpoint
+        sdedit_sigma: Optional[float] = None,
+
+        init_with_ones: bool = False,  # for testing
     ):
         super().__init__(
-            cond_channels=cond_channels, target_channels=target_channels,
-            extra_coord_channels=extra_coord_channels, extra_phys_time_scalar=extra_phys_time_scalar,
-            unet_base=unet_base, time_embed_dim=time_embed_dim,
-            sample_every_val=sample_every_val, sample_save_npz=sample_save_npz,
-            figures_cfg=figures_cfg, optimizer_cfg=optimizer_cfg, scheduler_cfg=scheduler_cfg,
+            cond_channels=cond_channels,
+            target_channels=target_channels,
+            extra_coord_channels=extra_coord_channels,
+            extra_phys_time_scalar=extra_phys_time_scalar,
+            unet_base=unet_base,
+            time_embed_dim=time_embed_dim,
+
+            # pass attention knobs into UNet2D
+            use_attention=use_attention,
+            attn_heads=attn_heads,
+            attn_dim_head=attn_dim_head,
+            attn_levels=attn_levels,
+
+            sample_every_val=sample_every_val,
+            sample_save_npz=sample_save_npz,
+            figures_cfg=figures_cfg,
+            optimizer_cfg=optimizer_cfg,
+            scheduler_cfg=scheduler_cfg,
+            init_with_ones=init_with_ones,
         )
         self.sigma_data = float(sigma_data)
         self.sigma_min = float(sigma_min)
@@ -54,10 +78,8 @@ class EDMInterpolator(DiffusionBase):
         self.p_mean = float(p_mean)
         self.p_std = float(p_std)
         self.loss_weighting = str(loss_weighting)
-
         self.sample_steps = int(sample_steps)
         self.rho = float(rho)
-
         self.sdedit_enabled = bool(sdedit_enabled)
         self.sdedit_sigma = sdedit_sigma
 
@@ -98,7 +120,7 @@ class EDMInterpolator(DiffusionBase):
         else:
             loss = F.mse_loss(eps_hat, noise, reduction="mean")
 
-        self.log(f"{stage}_loss", loss, prog_bar=True, on_step=(stage == "train"), on_epoch=True, sync_dist=True)
+        self.log(f"{stage}_loss", loss, prog_bar=True, on_step=(stage == "train"), on_epoch=True, sync_dist=True, batch_size=B)
         if stage == "val":
             self._cache_val_batch(x_cond, y_clean, meta)
         return loss

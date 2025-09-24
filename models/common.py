@@ -67,43 +67,137 @@ class Up(nn.Module):
         x = F.interpolate(x, scale_factor=2, mode="nearest")
         return self.conv(x)
 
+class SelfAttention2D(nn.Module):
+    """
+    Multi-head self-attention over 2D feature maps.
+    Follows the spirit of lucidrains' DDPM attention:
+      - 1x1 qkv projections
+      - scaled dot-product attention across HW tokens
+      - final 1x1 projection + residual
+    """
+    def __init__(self, channels: int, heads: int = 4, dim_head: int = 32):
+        super().__init__()
+        self.heads = heads
+        inner = heads * dim_head
+        self.scale = dim_head ** -0.5
+
+        self.norm = nn.GroupNorm(8, channels)
+        self.to_qkv = nn.Conv2d(channels, inner * 3, kernel_size=1, bias=False)
+        self.to_out = nn.Sequential(
+            nn.Conv2d(inner, channels, kernel_size=1, bias=False),
+            nn.GroupNorm(8, channels)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        b, c, h, w = x.shape
+        x_in = x
+        x = self.norm(x)
+
+        qkv = self.to_qkv(x)                         # (B, 3*inner, H, W)
+        q, k, v = qkv.chunk(3, dim=1)                # (B, inner, H, W) each
+
+        # reshape to (B, heads, dim_head, N)
+        def reshape_heads(t):
+            b, c, h, w = t.shape
+            t = t.view(b, self.heads, c // self.heads, h * w)
+            return t
+        q, k, v = map(reshape_heads, (q, k, v))
+
+        q = q * self.scale
+        # attn = softmax(q^T k) over tokens
+        # (B, heads, dim, N) @ (B, heads, dim, N) -> (B, heads, N, N)
+        attn = torch.einsum('b h d n, b h d m -> b h n m', q, k).softmax(dim=-1)
+
+        # out = (attn @ v^T)^T => (B, heads, dim, N)
+        out = torch.einsum('b h n m, b h d m -> b h d n', attn, v)
+
+        # merge heads back to (B, inner, H, W)
+        out = out.contiguous().view(b, -1, h, w)
+        out = self.to_out(out)
+        return out + x_in
+
+
 class UNet2D(nn.Module):
     """
-    Tiny U-Net with FiLM from time/noise embedding.
+    Tiny U-Net with FiLM from time/noise embedding + optional 2D attention.
     in_ch: channels of [noisy_target || conditioning || optional extras]
     out_ch: channels of target only (predict noise on targets)
     """
-    def __init__(self, in_ch: int, out_ch: int, base: int = 64, emb_dim: int = 256):
+    def __init__(
+        self,
+        in_ch: int,
+        out_ch: int,
+        base: int = 64,
+        emb_dim: int = 256,
+        # --- NEW attention controls ---
+        use_attention: bool = False,
+        attn_heads: int = 4,
+        attn_dim_head: int = 32,
+        # where to apply attention: subset of {"down1","down2","mid","up1","up2"}
+        attn_levels: tuple[str, ...] = ("mid",),
+    ):
         super().__init__()
+        self.use_attention = bool(use_attention)
+        self.attn_levels = set(attn_levels)
+
+        # time embedding MLP (FiLM)
         self.time_mlp = nn.Sequential(
             nn.Linear(emb_dim, emb_dim * 4),
             nn.SiLU(),
             nn.Linear(emb_dim * 4, emb_dim),
         )
-        # Enc
+
+        # ---------- Encoder ----------
         self.in_conv = nn.Conv2d(in_ch, base, 3, padding=1)
-        self.rb1 = ResBlock(base, base, emb_dim)
-        self.down1 = Down(base)
-        self.rb2 = ResBlock(base, base*2, emb_dim)
-        self.down2 = Down(base*2)
-        self.rb3 = ResBlock(base*2, base*4, emb_dim)
-        # Dec
+        self.rb1 = ResBlock(base, base, emb_dim)          # level: base
+        self.down1 = Down(base)                           # /2
+        self.rb2 = ResBlock(base, base*2, emb_dim)        # level: base*2
+        self.down2 = Down(base*2)                         # /4
+        self.rb3 = ResBlock(base*2, base*4, emb_dim)      # bottleneck in our 3-level UNet
+
+        # (optional) attention in encoder/bottleneck
+        if self.use_attention:
+            self.attn_down1 = SelfAttention2D(base)              if "down1" in self.attn_levels else nn.Identity()
+            self.attn_down2 = SelfAttention2D(base*2, attn_heads, attn_dim_head) if "down2" in self.attn_levels else nn.Identity()
+            self.attn_mid   = SelfAttention2D(base*4, attn_heads, attn_dim_head) if "mid"   in self.attn_levels else nn.Identity()
+        else:
+            self.attn_down1 = self.attn_down2 = self.attn_mid = nn.Identity()
+
+        # ---------- Decoder ----------
         self.up2 = Up(base*4, base*2)
-        self.rb4 = ResBlock(base*4, base*2, emb_dim)
+        self.rb4 = ResBlock(base*4, base*2, emb_dim)      # concat with h2
         self.up1 = Up(base*2, base)
-        self.rb5 = ResBlock(base*2, base, emb_dim)
+        self.rb5 = ResBlock(base*2, base, emb_dim)        # concat with h1
         self.out = nn.Conv2d(base, out_ch, 3, padding=1)
 
+        # (optional) attention in decoder
+        if self.use_attention:
+            self.attn_up2 = SelfAttention2D(base*2, attn_heads, attn_dim_head) if "up2" in self.attn_levels else nn.Identity()
+            self.attn_up1 = SelfAttention2D(base,   attn_heads, attn_dim_head) if "up1" in self.attn_levels else nn.Identity()
+        else:
+            self.attn_up2 = self.attn_up1 = nn.Identity()
+
     def forward(self, x: torch.Tensor, t_emb: torch.Tensor) -> torch.Tensor:
-        temb = self.time_mlp(t_emb)
+        temb = self.time_mlp(t_emb)  # (B, emb_dim)
+
+        # enc
         h0 = self.in_conv(x)
         h1 = self.rb1(h0, temb)
+        h1 = self.attn_down1(h1)                 # optional
         h2 = self.rb2(self.down1(h1), temb)
+        h2 = self.attn_down2(h2)                 # optional
         h3 = self.rb3(self.down2(h2), temb)
+        h3 = self.attn_mid(h3)                   # optional
+
+        # dec
         u2 = self.up2(h3)
         u2 = torch.cat([u2, h2], dim=1)
         u2 = self.rb4(u2, temb)
+        u2 = self.attn_up2(u2)                   # optional
+
         u1 = self.up1(u2)
         u1 = torch.cat([u1, h1], dim=1)
         u1 = self.rb5(u1, temb)
+        u1 = self.attn_up1(u1)                   # optional
+
         return self.out(u1)

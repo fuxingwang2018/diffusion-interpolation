@@ -10,13 +10,20 @@ extra_phys_time_scalar: null
 unet_base: 64
 time_embed_dim: 256
 
+# --- NEW: attention controls (threaded to UNet2D via DiffusionBase) ---
+use_attention: true
+attn_heads: 4
+attn_dim_head: 32
+attn_levels: ["mid", "down2"]   # good default: bottleneck + next coarsest level
+# valid names (given your 3-level UNet): "down1", "down2", "mid", "up2", "up1"
+
 # EDM noise / training
 sigma_data: 0.5
 sigma_min: 0.002
 sigma_max: 80.0
 p_mean: -1.2
 p_std: 1.2
-loss_weighting: edm  # or 'none'
+loss_weighting: edm
 
 # sampling
 sample_steps: 30
@@ -28,17 +35,18 @@ sample_save_npz: true
 sdedit_enabled: false
 sdedit_sigma: null
 
+init_with_ones: false  # for testing
 # optimizer / scheduler
 optimizer_cfg:
   _target_: torch.optim.AdamW
-  lr: 1.0e-4
+  lr: 5.0e-5
   weight_decay: 1.0e-4
 scheduler_cfg:
   _target_: torch.optim.lr_scheduler.ExponentialLR
   gamma: 0.9999
 
-# figures / files
+# figures / files (FIX: remove stray quote)
 figures_cfg:
-  root: "work/figs"
+  root: ${_work_dir}/figs
   use_meta_subdirs: true
   filename_template: "{date}_{window}_m{member}"

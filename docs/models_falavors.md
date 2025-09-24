@@ -69,7 +69,7 @@ scheduler_cfg:
 
 # figures / files
 figures_cfg:
-  root: "work/figs"
+  root: "_work/figs"
   use_meta_subdirs: true
   filename_template: "{date}_{window}_m{member}"
 ```
@@ -120,7 +120,7 @@ scheduler_cfg:
   gamma: 0.9999
 
 figures_cfg:
-  root: "work/figs"
+  root: "_work/figs"
   use_meta_subdirs: true
 ```
 
@@ -166,7 +166,7 @@ scheduler_cfg:
   gamma: 0.9999
 
 figures_cfg:
-  root: "work/figs"
+  root: "_work/figs"
   use_meta_subdirs: true
   filename_template: "{date}_{window}_m{member}"
 ```
@@ -213,7 +213,7 @@ scheduler_cfg:
   gamma: 0.9999
 
 figures_cfg:
-  root: "work/figs"
+  root: "_work/figs"
   use_meta_subdirs: true
 ```
 
@@ -259,7 +259,7 @@ scheduler_cfg:
   gamma: 0.9999
 
 figures_cfg:
-  root: "work/figs"
+  root: "_work/figs"
   use_meta_subdirs: true
 ```
 
@@ -306,7 +306,7 @@ scheduler_cfg:
   gamma: 0.9999
 
 figures_cfg:
-  root: "work/figs"
+  root: "_work/figs"
   use_meta_subdirs: true
 ```
 
