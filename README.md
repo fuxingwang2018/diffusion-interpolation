@@ -31,6 +31,9 @@ python tools/calc_stats.py --file-list sequences-for-stats-test2.csv  --root-dir
 python tools/get_sequences_csv.py --labels labels.csv --windows 0-6,6-12,12-18 --start-date 2023-01-01T00:00:00Z --end-date 2025-12-31T00:00:00Z --out  sequences-test3.csv --extra-out  sequences-for-stats-test3.csv --no-verify-fs
 python tools/calc_stats.py --file-list sequences-for-stats-test3.csv  --root-dir samples --out sequences-stats-test3.npz
 
+# 
+python tools/get_sequences_csv.py --labels labels.csv --windows 0-6,6-12,12-18,18-24,24-30,30-36 --start-date 2023-01-01T00:00:00Z --end-date 2024-03-31T00:00:00Z --out  sequences-test3.csv --extra-out  sequences-for-stats-test3.csv --no-verify-fs
+python tools/calc_stats.py --file-list sequences-for-stats-test3.csv  --root-dir samples --out sequences-stats-test3.npz
 
 ```
 

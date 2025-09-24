@@ -2,7 +2,7 @@
 
 _target_: data.MEPSNPYDataModule
 # Data
-root: ${_data_dir}/samples
+root: ${_data_dir}/samples_hp                             # link for tier1 data for high performance
 sequences_csv: ${_data_dir}/sequences-test.csv            # grouped CSV with JSON columns
 # Which members / leads to include (null = all present in CSV)
 members: null                                      # e.g. [0,1,2]
@@ -24,7 +24,7 @@ global_min_key: global_min
 global_max_key: global_max
 norm_const: 0.95
 # Loader
-batch_size: 32
+batch_size: 64
 num_workers: 1
 pin_memory: true
 shuffle_train: true
@@ -32,10 +32,8 @@ dtype: float32
 mmap: true
 # Split
 split:
-  type: ratio                                      # ratio | count | none
-  train: 0.8
-  val: 0.1
-  test: 0.1
-  seed: 42
+  type: chrono_cycle                                      # ratio | count | chrono_cycle | none
   shuffle_before_split: false
+ 
+
 

@@ -80,8 +80,21 @@ def main(cfg: DictConfig) -> None:
     #exit()
 
     callbacks = [instantiate(cb) for cb in cfg.get("callbacks", [])]
+
+    # --- profiler ---
+    profiler = None
+    if "profiler" in cfg.trainer and cfg.trainer.profiler is not None:
+        profiler = instantiate(cfg.trainer.profiler)
     
-    trainer = L.Trainer(**cfg.trainer, logger=logger, callbacks=callbacks)
+    # --- trainer args ---
+    # Convert DictConfig to a plain dict (resolves interpolations too)
+    trainer_cfg = OmegaConf.to_container(cfg.trainer, resolve=True)
+    
+    # Remove profiler key so it doesn't get passed twice
+    trainer_cfg.pop("profiler", None)
+
+
+    trainer = L.Trainer(**trainer_cfg, profiler=profiler, logger=logger, callbacks=callbacks)
 
     # --------- train ----------
 

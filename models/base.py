@@ -53,6 +53,7 @@ class DiffusionBase(L.LightningModule):
         # extras
         self.add_coords = bool(extra_coord_channels)
         self.phys_time_scalar = extra_phys_time_scalar
+        self.init_with_ones = init_with_ones
 
         # UNet io
         in_ch = self.target_channels + self.cond_channels
@@ -169,8 +170,9 @@ class DiffusionBase(L.LightningModule):
     
     
     def on_load_checkpoint(self, checkpoint) -> None:
-        if self.init_with_ones:
-            self._loaded_from_ckpt = True
+        self._loaded_from_ckpt = True
+        self.init_with_ones = False
+            
     
     @staticmethod
     def _weight_init(m: nn.Module):
@@ -190,13 +192,14 @@ class DiffusionBase(L.LightningModule):
 
             # If we didn't restore from a checkpoint, initialize weights now
         if not getattr(self, "_loaded_from_ckpt", False):
-            self.apply(self._weight_init)
-            # Common diffusion practice: zero-init the final conv for stable starts
-            if hasattr(self.unet, "out") and isinstance(self.unet.out, nn.Conv2d):
-                nn.init.zeros_(self.unet.out.weight)
-                if self.unet.out.bias is not None:
-                    nn.init.zeros_(self.unet.out.bias)
-            self.print("[Init] Weights initialized from scratch (no checkpoint).")
+            if self.init_with_ones:
+                self.apply(self._weight_init)
+                # Common diffusion practice: zero-init the final conv for stable starts
+                if hasattr(self.unet, "out") and isinstance(self.unet.out, nn.Conv2d):
+                    nn.init.zeros_(self.unet.out.weight)
+                    if self.unet.out.bias is not None:
+                        nn.init.zeros_(self.unet.out.bias)
+                self.print("[Init] Weights initialized from scratch (no checkpoint).")
         else:
             self.print("[Init] Restored from checkpoint; kept checkpoint weights.")
 
@@ -266,7 +269,8 @@ class DiffusionBase(L.LightningModule):
         # tensors to device
         x_cond = x_cond.to(self.device)
         y_gt   = y_gt.to(self.device)
-        y_pred = self.sample_from_cond(x_cond, shape_target=y_gt.shape[1:4])  # subclass-defined
+        with torch.amp.autocast("cuda", enabled=False):
+            y_pred = self.sample_from_cond(x_cond, shape_target=y_gt.shape[1:4])  # subclass-defined
     
         # plotting
         try:

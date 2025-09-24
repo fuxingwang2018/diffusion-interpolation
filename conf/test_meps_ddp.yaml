@@ -3,15 +3,14 @@ _root_dir: ${oc.env:ROOT_DIR,/home/users/u101329/p200177_t2/u101329/diffusion-in
 _mlflow_dir: ${oc.env:MLFLOW_DIR,/home/users/u101329/p200177_t2/u101329/_mlruns}
 
 _work_dir: ${oc.env:WORK_DIR,${_root_dir}/_work}
-_figures_dir: ${_work_dir}/figuers
 _checkpoints_dir: ${_work_dir}/checkpoints
 
-resume_from_ckpt: None # file, best or last
+resume_from_ckpt: none  # none, file, best or last
 ckpt_path: ${_checkpoints_dir}/last.ckpt # if resume_from_ckpt=file
 
 defaults:
   - trainer: ddp
-  - datamodule: meps_npy2
+  - datamodule: meps_npy3
   - model: ddpm_attention
   - _self_
 
@@ -26,7 +25,7 @@ seed: 42
 logger:
   _target_: lightning.pytorch.loggers.MLFlowLogger
   experiment_name: "meps-interpolation"
-  run_name: "ddpm-run_${now:%Y%m%d_%H%M%S}"
+  run_name: "ddpm-npy-1-year_${now:%Y%m%d_%H%M%S}"
   tracking_uri: file:${_mlflow_dir}
   tags:
     project: "diffusion_interpolation"

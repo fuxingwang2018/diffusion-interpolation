@@ -15,7 +15,7 @@ extra_coord_channels: true
 extra_phys_time_scalar: null
 unet_base: 64
 time_embed_dim: 256
-
+force_float32: True
 init_with_ones: false  # for testing
 
 # DDPM core
@@ -24,7 +24,7 @@ schedule: cosine
 cosine_s: 0.02           # <— safer tail than 0.008
 predict: v                
 loss_weighting: snr
-snr_gamma: 5.0
+snr_gamma: 2.0
 
 
 # validation sampling & saving
@@ -33,7 +33,7 @@ sample_save_npz: true
 
 optimizer_cfg:
   _target_: torch.optim.AdamW
-  lr: 1.0e-4
+  lr: 0.5e-4
   weight_decay: 1.0e-4
 
 scheduler_cfg:
@@ -41,6 +41,6 @@ scheduler_cfg:
   gamma: 0.9999
 
 figures_cfg:
-  root: ${_work_dir}/figs
+  root: ${_work_dir}/figures
   use_meta_subdirs: true
   filename_template: "{date}_{window}_m{member}"

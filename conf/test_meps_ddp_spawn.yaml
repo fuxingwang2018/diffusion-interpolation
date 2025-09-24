@@ -76,7 +76,7 @@ model:
   loss_weighting: edm
   sample_steps: 30
   rho: 7.0
-  sample_every_val: 1
+  sample_every_val: 5
   sample_save_npz: false
 
   cond_channels: 6  #To learn how to compute cond_ch and targ_ch, see docs/model_channles.md, 

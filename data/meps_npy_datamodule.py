@@ -9,6 +9,7 @@ import pandas as pd
 import torch
 import lightning as L
 from torch.utils.data import Dataset, DataLoader
+from lightning.pytorch.utilities.rank_zero import rank_zero_only, rank_zero_info
 
 
 # ============================================================
@@ -53,13 +54,6 @@ def read_grouped_ensemble_windows(
         "start_valid_time": Any | None,
         "end_valid_time": Any | None,
       }
-
-    Filtering:
-      - If `members_filter` is given, only those members are kept.
-        If `require_all_selected_members=True`, the record is dropped if any requested member is missing.
-      - If `leads_filter` is given, only those lead times are kept (and then sorted).
-      - If fewer than 2 leads remain, the record is dropped (no endpoints).
-      - If `require_internal_targets=True`, at least 3 leads must remain (need internals).
     """
     df = pd.read_csv(csv_path)
     out: List[Dict[str, Any]] = []
@@ -143,9 +137,6 @@ class Normalizer:
       - "none":     return x unchanged
       - "zscore":   (x - mean) / std
       - "symrange": norm_const * (x - average) / max(|global_min - average|, |global_max - average|)
-
-    Stats are loaded from `stats_npz` and are allowed to be scalar, (C,), (H, W), or (C, H, W).
-    If `channel_indices` is provided, stats are sliced along the leading channel axis when possible.
     """
 
     def __init__(
@@ -246,11 +237,12 @@ class MEPSWindowDataset(Dataset):
 
     1) sample_mode="ensemble": one sample per (date, window) keeping all members.
        If stack_time_on_channel=True:
-           x shape: (M, 2*C, H, W)     # first+last leads per member, time fused into channels
-           y shape: (M, (T-2)*C, H, W) # internal leads per member, time fused into channels
-       Else (time kept separate):
+           x shape: (M, 2*C, H, W)
+           y shape: (M, (T-2)*C, H, W)
+       Else:
            x shape: (M, 2, C, H, W)
            y shape: (M, T-2, C, H, W)
+
        If stack_member_on_channel=True (only when time is fused), the member axis is also
        folded into channels:
            x shape: (M*2*C, H, W)
@@ -260,13 +252,9 @@ class MEPSWindowDataset(Dataset):
        If stack_time_on_channel=True:
            x shape: (2*C, H, W)
            y shape: ((T-2)*C, H, W)
-       Else (time kept separate):
+       Else:
            x shape: (2, C, H, W)
            y shape: (T-2, C, H, W)
-
-    Returns:
-        (x: torch.Tensor, y: torch.Tensor, meta: dict)
-        where `meta` includes: date, window, lead_times, members/member_index, etc.
     """
 
     def __init__(
@@ -470,17 +458,31 @@ class MEPSWindowDataset(Dataset):
 @dataclass
 class SplitConfig:
     """
-    Split strategy for a single CSV source:
-      - ratio: use train/val/test fractions (must sum to ~1.0 with rounding)
-      - count: use absolute counts for train/val/test
-      - none:  don't split (everything → train; val/test empty)
+    Split strategy for a single CSV source.
+
+    Built-in types:
+      - "ratio": classic fraction by count
+      - "count": classic by absolute counts
+      - "none":  no split (everything -> train)
+      - "chrono_cycle": date-aware:
+            * sort unique days ascending from records' 'date'
+            * last (1 - train_val_fraction) portion of days -> test
+            * first train_val_fraction portion -> cycle of (train_days, gap_days, val_days)
     """
-    type: Literal["ratio", "count", "none"] = "ratio"
+    type: Literal["ratio", "count", "none", "chrono_cycle"] = "ratio"
+
+    # legacy fields (used by ratio / count)
     train: float = 0.8
     val: float = 0.1
     test: float = 0.1
     seed: int = 42
     shuffle_before_split: bool = True
+
+    # chrono_cycle params
+    train_val_fraction: float = 0.9   # first 90% of days go to train/val; last 10% -> test
+    train_days: int = 25
+    gap_days: int = 2                 # ignored
+    val_days: int = 5
 
 
 class MEPSNPYDataModule(L.LightningDataModule):
@@ -491,8 +493,6 @@ class MEPSNPYDataModule(L.LightningDataModule):
     For each member inside a (date, window):
       - x := endpoints (first & last lead)
       - y := internals (all leads between first and last)
-
-    sample_mode behavior matches `MEPSWindowDataset` (see its docstring).
     """
 
     def __init__(
@@ -603,10 +603,90 @@ class MEPSNPYDataModule(L.LightningDataModule):
 
     def _split(self, records: List[Dict[str, Any]]):
         """
-        Split `records` according to `self.split_cfg` (ratio | count | none).
-        Returns (train_records, val_records, test_records).
+        Split `records` according to `self.split_cfg`.
+
+        For type = "chrono_cycle":
+          - parse each record['date'] to a pandas Timestamp (date only)
+          - sort unique days ascending
+          - take first floor(train_val_fraction * n_days) days -> train/val by cyclic window
+          - remaining days -> test
+          - within the 90% part, use repeating cycle:
+              train_days -> "train"
+              gap_days   -> ignored
+              val_days   -> "val"
+          - rows with missing/unparsable dates are ignored (not included in any split)
         """
         cfg = self.split_cfg
+
+        # ----- chronology-driven split -----
+        if cfg.type == "chrono_cycle":
+            # map each record to a normalized date (YYYY-MM-DD). drop NaT.
+            rec_dates: List[Optional[pd.Timestamp]] = []
+            for r in records:
+                d = r.get("date", None)
+                ts = pd.to_datetime(d, errors="coerce") if d is not None else pd.NaT
+                if pd.notna(ts):
+                    ts = pd.Timestamp(year=ts.year, month=ts.month, day=ts.day)
+                else:
+                    ts = pd.NaT
+                rec_dates.append(ts)
+
+            # index of records that have a valid date
+            valid_idx = [i for i, ts in enumerate(rec_dates) if pd.notna(ts)]
+            if not valid_idx:
+                # fallback: nothing has a date -> put all in train
+                return records, [], []
+
+            # build sorted unique list of days
+            all_days = sorted({rec_dates[i] for i in valid_idx})
+            n_days = len(all_days)
+            if n_days == 0:
+                return records, [], []
+
+            # compute cutoff for test (last (1 - train_val_fraction) days)
+            frac = max(0.0, min(1.0, float(cfg.train_val_fraction)))
+            cutoff = int(frac * n_days)  # days [0 : cutoff) -> train/val; [cutoff : end) -> test
+            cutoff = max(0, min(cutoff, n_days))
+
+            days_trainval = all_days[:cutoff]
+            days_test = all_days[cutoff:]
+
+            # cycle pattern over the train/val days
+            T, G, V = int(cfg.train_days), int(cfg.gap_days), int(cfg.val_days)
+            cycle_len = max(1, T + G + V)
+
+            # assign each day in the train/val segment to split
+            day_to_split: Dict[pd.Timestamp, str] = {}
+            for idx_day, day in enumerate(days_trainval):
+                pos = idx_day % cycle_len
+                if pos < T:
+                    day_to_split[day] = "train"
+                elif pos < T + G:
+                    day_to_split[day] = "gap"  # ignored
+                else:
+                    day_to_split[day] = "val"
+
+            # collect records according to their day assignment
+            rec_train: List[Dict[str, Any]] = []
+            rec_val: List[Dict[str, Any]] = []
+            rec_test: List[Dict[str, Any]] = []
+            test_days_set = set(days_test)
+
+            for i in valid_idx:
+                day = rec_dates[i]
+                if day in test_days_set:
+                    rec_test.append(records[i])
+                else:
+                    tag = day_to_split.get(day, "gap")
+                    if tag == "train":
+                        rec_train.append(records[i])
+                    elif tag == "val":
+                        rec_val.append(records[i])
+                    # else gap -> ignore
+
+            return rec_train, rec_val, rec_test
+
+        # ----- existing legacy behavior (unchanged) -----
         n = len(records)
         idx = list(range(n))
 
@@ -679,6 +759,12 @@ class MEPSNPYDataModule(L.LightningDataModule):
         self.train_set = mk(rec_train)
         self.val_set = mk(rec_val)
         self.test_set = mk(rec_test)
+        
+        train_size = len(self.train_set) if self.train_set else 0
+        val_size = len(self.val_set) if self.val_set else 0
+        test_size = len(self.test_set) if self.test_set else 0
+        rank_zero_info(f"Dataset sizes - Train: {train_size}, Val: {val_size}, Test: {test_size}")
+         
 
     # ---------- DataLoaders ----------
 
