@@ -2,7 +2,7 @@
 
 _target_: data.MEPSNPYDataModule
 # Data
-root: ${_data_dir}/samples_hp                             # link for tier1 data for high performance
+root: ${_data_dir}/samples                              # link for tier1 data for high performance
 sequences_csv: ${_data_dir}/sequences-test.csv            # grouped CSV with JSON columns
 # Which members / leads to include (null = all present in CSV)
 members: null                                      # e.g. [0,1,2]
@@ -10,10 +10,8 @@ leads: null                                        # e.g. [0,1,2,3,4,5,6]
 require_internal_targets: true                     # need at least one internal lead
 require_all_selected_members: true                 # skip windows missing any requested member
 # Sample building
-sample_mode: per_member                              # ensemble | per_member
+sample_mode: ensemble                              # ensemble | per_member
 file_channel_indices: [0, 1, 2]                    # pick C channels from each (4,H,W)
-stack_time_on_channel: true                        # fuse time into channels
-stack_member_on_channel: true                     # (ensemble only) keep member dim
 # Normalization
 normalize: symrange                                    # none | zscore | symrange
 stats_npz: ${_data_dir}/sequences-stats-test.npz
@@ -24,8 +22,8 @@ global_min_key: global_min
 global_max_key: global_max
 norm_const: 0.95
 # Loader
-batch_size: 64
-num_workers: 1
+batch_size: 32
+num_workers: 2
 pin_memory: true
 shuffle_train: true
 dtype: float32
@@ -35,5 +33,3 @@ split:
   type: chrono_cycle                                      # ratio | count | chrono_cycle | none
   shuffle_before_split: false
  
-
-

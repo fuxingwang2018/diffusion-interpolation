@@ -11,7 +11,7 @@ import lightning as L
 from torch.utils.data import Dataset, DataLoader
 from lightning.pytorch.utilities.rank_zero import rank_zero_only, rank_zero_info
 
-
+ 
 # ============================================================
 # Utilities
 # ============================================================
@@ -236,23 +236,13 @@ class MEPSWindowDataset(Dataset):
     Two sample modes:
 
     1) sample_mode="ensemble": one sample per (date, window) keeping all members.
-       If stack_time_on_channel=True:
-           x shape: (M, 2*C, H, W)
-           y shape: (M, (T-2)*C, H, W)
-       Else:
+  
            x shape: (M, 2, C, H, W)
            y shape: (M, T-2, C, H, W)
 
-       If stack_member_on_channel=True (only when time is fused), the member axis is also
-       folded into channels:
-           x shape: (M*2*C, H, W)
-           y shape: (M*(T-2)*C, H, W)
+ 
 
     2) sample_mode="per_member": one sample per (date, window, member).
-       If stack_time_on_channel=True:
-           x shape: (2*C, H, W)
-           y shape: ((T-2)*C, H, W)
-       Else:
            x shape: (2, C, H, W)
            y shape: (T-2, C, H, W)
     """
@@ -262,8 +252,6 @@ class MEPSWindowDataset(Dataset):
         records: List[Dict[str, Any]],
         file_channel_indices: Sequence[int] = (0, 1, 2, 3),
         sample_mode: Literal["ensemble", "per_member"] = "ensemble",
-        stack_time_on_channel: bool = True,
-        stack_member_on_channel: bool = False,  # only used in ensemble mode when time is fused
         dtype: Literal["float32", "float16", "bfloat16", "float64"] = "float32",
         mmap: bool = True,
         # normalization
@@ -283,8 +271,6 @@ class MEPSWindowDataset(Dataset):
         self.recs = records
         self.chan_idx = list(file_channel_indices)
         self.sample_mode = sample_mode
-        self.stack_time_on_channel = bool(stack_time_on_channel)
-        self.stack_member_on_channel = bool(stack_member_on_channel)
         self.mmap = mmap
 
         self.dtype_map = {
@@ -370,19 +356,6 @@ class MEPSWindowDataset(Dataset):
             x = np.stack(x_m, axis=0)  # (M,2,C,H,W)
             y = np.stack(y_m, axis=0)  # (M,T-2,C,H,W)
 
-            # Fuse time->channel if requested
-            if self.stack_time_on_channel:
-                M, T2, C, H, W = x.shape
-                x = x.reshape(M, T2 * C, H, W)                    # (M, 2*C, H, W)
-                M, Ti, C, H, W = y.shape
-                y = y.reshape(M, Ti * C, H, W)                    # (M, (T-2)*C, H, W)
-
-            # Optionally also fuse member->channel (only meaningful if time already fused)
-            if self.stack_member_on_channel and x.ndim == 4:
-                M, Cx, H, W = x.shape
-                x = x.reshape(M * Cx, H, W)                       # (M*2*C, H, W)
-                M, Cy, H, W = y.shape
-                y = y.reshape(M * Cy, H, W)                       # (M*(T-2)*C, H, W)
 
             meta = {
                 "sample_mode": "ensemble",
@@ -422,14 +395,8 @@ class MEPSWindowDataset(Dataset):
 
         x_tchw = self._stack_time([first, last])      # (2,C,H,W)
         y_tchw = self._stack_time(internals)          # (T-2,C,H,W)
-
-        if self.stack_time_on_channel:
-            T2, C, H, W = x_tchw.shape
-            x = x_tchw.reshape(T2 * C, H, W)          # (2*C, H, W)
-            Ti, C, H, W = y_tchw.shape
-            y = y_tchw.reshape(Ti * C, H, W)          # ((T-2)*C, H, W)
-        else:
-            x, y = x_tchw, y_tchw
+ 
+        x, y = x_tchw, y_tchw
 
         meta = {
             "sample_mode": "per_member",
@@ -513,9 +480,7 @@ class MEPSNPYDataModule(L.LightningDataModule):
         # Dataset behavior
         sample_mode: Literal["ensemble", "per_member"] = "ensemble",
         file_channel_indices: Sequence[int] = (0, 1, 2, 3),
-        stack_time_on_channel: bool = True,
-        stack_member_on_channel: bool = False,  # ensemble mode only (when time fused)
-
+ 
         # Normalization
         normalize: Literal["none", "zscore", "symrange"] = "none",
         stats_npz: Optional[str] = None,
@@ -555,9 +520,7 @@ class MEPSNPYDataModule(L.LightningDataModule):
         # Dataset behavior
         self.sample_mode = sample_mode
         self.file_channel_indices = list(file_channel_indices)
-        self.stack_time_on_channel = bool(stack_time_on_channel)
-        self.stack_member_on_channel = bool(stack_member_on_channel)
-
+ 
         # Normalization
         self.normalize = normalize
         self.stats_npz = stats_npz
@@ -742,8 +705,6 @@ class MEPSNPYDataModule(L.LightningDataModule):
                 records=recs,
                 file_channel_indices=self.file_channel_indices,
                 sample_mode=self.sample_mode,
-                stack_time_on_channel=self.stack_time_on_channel,
-                stack_member_on_channel=self.stack_member_on_channel,
                 dtype=self.dtype,
                 mmap=self.mmap,
                 normalize=self.normalize,

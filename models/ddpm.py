@@ -4,16 +4,15 @@ from typing import Any, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
-from lightning.pytorch.utilities.rank_zero import rank_zero_only, rank_zero_info
+from lightning.pytorch.utilities.rank_zero import rank_zero_info
 
 from .base import DiffusionBase
-
 
 # ---------- Schedules ----------
 
 def _cosine_beta_schedule(
     T: int,
-    s: float = 0.02,                 # slightly larger s than the usual 0.008 -> more stable tails
+    s: float = 0.02,
     device=None,
     dtype=None
 ):
@@ -22,7 +21,6 @@ def _cosine_beta_schedule(
     alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
     betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
     return betas.clamp(1e-6, 0.999)
-
 
 def _linear_beta_schedule(
     T: int,
@@ -33,20 +31,23 @@ def _linear_beta_schedule(
 ):
     return torch.linspace(beta_start, beta_end, T, device=device, dtype=dtype)
 
-
 # ---------- Model ----------
 
 class DDPMInterpolator(DiffusionBase):
     """
     Conditional diffusion with discrete timesteps (DDPM / DDIM).
-    - Training target: ε (noise) or v (progressive distillation target)
-    - Sampling: DDPM or DDIM
-    - Stability features:
-        * clamp ā_t and (1 - ā_t)
-        * optional min-SNR loss weighting
-        * safer cosine schedule (configurable s)
-        * optional x0 clamp during sampling (debug)
-        * optional strict float32
+
+    Data shapes this class supports:
+      - x_cond:  [B, 2, C, H, W]  (two endpoint frames)  OR [B, 2*C, H, W]
+      - y_clean: [B, T, C, H, W]  (T target frames)      OR [B, T*C, H, W]
+
+    The base class flattens BTCHW → BCHW around the UNet. Here we only need to:
+      • broadcast the per-batch noise coefficients to match 4-D or 5-D inputs, and
+      • make the samplers robust to x_cond being 4-D or 5-D.
+
+    IMPORTANT when constructing the model:
+      cond_channels   = 2 * C
+      target_channels = T * C
     """
 
     def __init__(
@@ -75,15 +76,15 @@ class DDPMInterpolator(DiffusionBase):
         # DDPM specific
         T: int = 1000,
         schedule: str = "cosine",      # 'cosine' or 'linear'
-        cosine_s: float = 0.02,         # safer tail for cosine schedule
-        predict: str = "eps",           # 'eps' or 'v'
-        loss_weighting: str = "none",   # 'none' or 'snr'
-        snr_gamma: float = 5.0,         # cap for min-SNR loss weighting
+        cosine_s: float = 0.02,
+        predict: str = "eps",          # 'eps' or 'v'
+        loss_weighting: str = "none",  # 'none' or 'snr'
+        snr_gamma: float = 5.0,
 
         # numeric guards
-        clamp_eps: float = 1e-5,        # clamp for abar and (1-abar)
-        x0_clip: Optional[float] = None,# e.g., 3.0 to debug explosions; None disables
-        force_float32: bool = False,    # set to True to force FP32 end-to-end
+        clamp_eps: float = 1e-5,
+        x0_clip: Optional[float] = None,
+        force_float32: bool = False,
 
         # SDEdit knobs
         sdedit_enabled: bool = False,
@@ -91,10 +92,9 @@ class DDPMInterpolator(DiffusionBase):
         sdedit_start_pct: Optional[float] = None,
 
         # misc
-        debug_sampling: bool = False,   # print per-step stats during sampling
-        init_with_ones: bool = False,   # forwarded to base (tests)
+        debug_sampling: bool = False,
+        init_with_ones: bool = False,
     ):
-        # ---- build base (UNet, etc.) ----
         super().__init__(
             cond_channels=cond_channels,
             target_channels=target_channels,
@@ -128,7 +128,7 @@ class DDPMInterpolator(DiffusionBase):
         self.force_float32 = bool(force_float32)
         self.debug_sampling = bool(debug_sampling)
 
-        # schedule buffers
+        # schedule buffers (registered on CPU; moved by Lightning)
         device = torch.device("cpu")
         dtype = torch.float32
 
@@ -154,19 +154,27 @@ class DDPMInterpolator(DiffusionBase):
         self.sdedit_start_t = sdedit_start_t
         self.sdedit_start_pct = sdedit_start_pct
 
-    # ----- training / validation -----
+    # ----- util: expand per-batch scalars to match tensor rank -----
+    @staticmethod
+    def _coef_like(batch_vec: torch.Tensor, like: torch.Tensor) -> torch.Tensor:
+        """
+        batch_vec: (B,)
+        like: 4-D or 5-D tensor with leading batch dim
+        returns: batch_vec reshaped to (B, 1, 1, 1[, 1]) to broadcast over `like`
+        """
+        assert like.size(0) == batch_vec.size(0), "Batch size mismatch."
+        return batch_vec.view(like.size(0), *([1] * (like.dim() - 1)))
+
+    # ----- training / validation / test -----
     def _shared_step(self, batch: Any, stage: str):
         """
         batch = (x_cond, y_clean[, meta])
-        """
-        try:
-             rank_zero_info(f"XXXXXXXXX Stage: {stage}")
-             rank_zero_info(x_cond.shape)
-             rank_zero_info(y_clean.shape)
-             rank_zero_info(meta)
-        except Exception as e:
-            pass
 
+        x_cond:  [B, 2, C, H, W] or [B, 2*C, H, W]
+        y_clean: [B, T, C, H, W] or [B, T*C, H, W]
+
+        We add noise in the same layout we receive (4-D or 5-D), so targets/preds match shapes.
+        """
         meta = None
         if isinstance(batch, (list, tuple)) and len(batch) == 3:
             x_cond, y_clean, meta = batch
@@ -183,38 +191,42 @@ class DDPMInterpolator(DiffusionBase):
         t = torch.randint(0, self.T, (B,), device=device)
 
         eps = self.clamp_eps
-        abar_t = self.alphas_cumprod[t].clamp(min=eps, max=1 - eps)    # (B,)
+        abar_t = self.alphas_cumprod[t].clamp(min=eps, max=1 - eps)  # (B,)
         one_m_abar = (1 - abar_t).clamp(min=eps)
 
-        sqrt_abar   = abar_t.sqrt()[:, None, None, None]
-        sqrt_1mabar = one_m_abar.sqrt()[:, None, None, None]
+        sqrt_abar   = abar_t.sqrt()
+        sqrt_1mabar = one_m_abar.sqrt()
 
-        noise = torch.randn_like(y_clean)
-        y_noisy = sqrt_abar * y_clean + sqrt_1mabar * noise
+        # expand coeffs to (B,1,1,1[,1]) to match y_clean rank (4-D or 5-D)
+        ca = self._coef_like(sqrt_abar,   y_clean)
+        cb = self._coef_like(sqrt_1mabar, y_clean)
 
-        # network expects a scalar time embedding per sample; here normalized t in [0,1]
+        noise   = torch.randn_like(y_clean)
+        y_noisy = ca * y_clean + cb * noise
+
+        # network expects a scalar time embedding per sample; normalized t in [0,1]
         t_norm = (t.float() / float(self.T)).clamp(0, 1)
-        pred = super().forward(y_noisy, x_cond, t_norm)
+        pred = super().forward(y_noisy, x_cond, t_norm)   # returns shape matching y_noisy
 
         # targets
         if self.predict == "eps":
             target = noise
         elif self.predict == "v":
-            target = sqrt_abar * y_noisy - sqrt_1mabar * noise
+            target = ca * y_noisy - cb * noise
         else:
             raise ValueError(f"Unknown predict='{self.predict}'")
 
-        # loss
+        # loss (+ optional SNR weighting)
         if self.loss_weighting == "snr":
-            snr = (abar_t / one_m_abar)
+            snr = (abar_t / one_m_abar)              # (B,)
             snr_clamped = snr.clamp(max=self.snr_gamma)
             if self.predict == "eps":
                 w = snr_clamped / (snr + 1e-8)
             else:  # 'v'
                 w = snr_clamped / (snr + 1.0)
-
+            w = self._coef_like(w, pred)             # (B,1,1,1[,1])
             loss = F.mse_loss(pred, target, reduction="none")
-            loss = (loss * w[:, None, None, None]).mean()
+            loss = (loss * w).mean()
         else:
             loss = F.mse_loss(pred, target, reduction="mean")
 
@@ -222,10 +234,13 @@ class DDPMInterpolator(DiffusionBase):
             f"{stage}_loss", loss, prog_bar=True,
             on_step=(stage == "train"), on_epoch=True, sync_dist=True, batch_size=B
         )
+
         if stage == "val":
+            # cache a single batch for validation visualization
             if not hasattr(self, "_val_cache"):
                 self._val_cache = []  # type: ignore[attr-defined]
             self._cache_val_batch(x_cond, y_clean, meta)
+
         return loss
 
     def training_step(self, batch, batch_idx):  # noqa: ARG002
@@ -235,7 +250,7 @@ class DDPMInterpolator(DiffusionBase):
         self._shared_step(batch, "val")
 
     def test_step(self, batch, batch_idx):  # noqa: ARG002
-            return self._shared_step(batch, "test")
+        return self._shared_step(batch, "test")
 
     # ----- helpers -----
     def _maybe_float32(self, *tensors):
@@ -247,8 +262,20 @@ class DDPMInterpolator(DiffusionBase):
     # ----- samplers -----
     @torch.no_grad()
     def ddpm_sample(self, x_cond: torch.Tensor, shape_target: Tuple[int, int, int]) -> torch.Tensor:
+        """
+        x_cond: can be [B, 2, C, H, W] or [B, 2*C, H, W]
+        shape_target: (T*C, H, W) — flattened target channels for the sampler
+        returns: y in BCHW with C_y = T*C (the base will reshape later if needed)
+        """
         x_cond = self._maybe_float32(x_cond)
-        B, H, W = x_cond.shape[0], x_cond.shape[2], x_cond.shape[3]
+
+        if x_cond.dim() == 5:
+            B, _, _, H, W = x_cond.shape
+        elif x_cond.dim() == 4:
+            B, _, H, W = x_cond.shape
+        else:
+            raise ValueError(f"x_cond must be 4-D or 5-D, got {tuple(x_cond.shape)}")
+
         Cy = shape_target[0]
         y = torch.randn((B, Cy, H, W), device=x_cond.device, dtype=x_cond.dtype)
 
@@ -258,45 +285,38 @@ class DDPMInterpolator(DiffusionBase):
             t = torch.full((B,), t_int, device=x_cond.device, dtype=torch.long)
             t_norm = (t.float() / float(self.T)).clamp(0, 1)
 
-            abar_t = self.alphas_cumprod[t].clamp(min=eps, max=1 - eps)
+            abar_t = self.alphas_cumprod[t].clamp(min=eps, max=1 - eps)   # (B,)
             one_m_abar = (1 - abar_t).clamp(min=eps)
-            sqrt_abar   = abar_t.sqrt()[:, None, None, None]
-            sqrt_1mabar = one_m_abar.sqrt()[:, None, None, None]
+            sqrt_abar   = abar_t.sqrt()
+            sqrt_1mabar = one_m_abar.sqrt()
 
-            pred = super().forward(y, x_cond, t_norm)
+            # expand for BCHW y
+            ca = sqrt_abar.view(B, 1, 1, 1)
+            cb = sqrt_1mabar.view(B, 1, 1, 1)
+
+            pred = super().forward(y, x_cond, t_norm)  # handles 4-D y + 4-D/5-D x_cond
             if self.predict == "eps":
                 eps_hat = pred
             else:  # 'v'
                 # eps = (sqrt(abar) * y - v) / sqrt(1 - abar)
-                eps_hat = (sqrt_abar * y - pred) / sqrt_1mabar
+                eps_hat = (ca * y - pred) / cb
 
             # x0 estimate
-            x0 = (y - sqrt_1mabar * eps_hat) / sqrt_abar
+            x0 = (y - cb * eps_hat) / ca
             if self.x0_clip is not None:
                 x0 = x0.clamp_(-self.x0_clip, self.x0_clip)
 
             # DDPM posterior mean
             den = one_m_abar
-            coef1 = (self.alphas_cumprod_prev[t].sqrt() * self.betas[t] / den)
+            coef1 = (self.alphas_cumprod_prev[t].sqrt() * self.betas[t] / den)  # (B,)
             coef2 = ((1 - self.alphas_cumprod_prev[t]) * self.alphas[t].sqrt() / den)
-            mean = coef1[:, None, None, None] * x0 + coef2[:, None, None, None] * y
+            mean = coef1.view(B,1,1,1) * x0 + coef2.view(B,1,1,1) * y
 
             if t_int > 0:
-                # posterior variance β̃_t
                 posterior_var = ((1 - self.alphas_cumprod_prev[t]) / den) * self.betas[t]
-                y = mean + posterior_var.sqrt()[:, None, None, None] * torch.randn_like(y)
+                y = mean + posterior_var.sqrt().view(B,1,1,1) * torch.randn_like(y)
             else:
                 y = mean
-
-            if self.debug_sampling and (B == 1):
-                print({
-                    "t": t_int,
-                    "abar_t": float(abar_t.mean()),
-                    "y_mean": float(y.mean()),
-                    "y_std": float(y.std()),
-                    "pred_mean": float(pred.mean()),
-                    "pred_std": float(pred.std()),
-                })
 
         return y
 
@@ -308,11 +328,22 @@ class DDPMInterpolator(DiffusionBase):
         eta: float = 0.0,
         steps: int = 50
     ) -> torch.Tensor:
+        """
+        x_cond: 4-D or 5-D (see ddpm_sample)
+        shape_target: (T*C, H, W)
+        returns: BCHW with C_y = T*C
+        """
         x_cond = self._maybe_float32(x_cond)
         device = x_cond.device
         ts = torch.linspace(0, self.T - 1, steps, device=device).long()
 
-        B, H, W = x_cond.shape[0], x_cond.shape[2], x_cond.shape[3]
+        if x_cond.dim() == 5:
+            B, _, _, H, W = x_cond.shape
+        elif x_cond.dim() == 4:
+            B, _, H, W = x_cond.shape
+        else:
+            raise ValueError(f"x_cond must be 4-D or 5-D, got {tuple(x_cond.shape)}")
+
         Cy = shape_target[0]
         y = torch.randn((B, Cy, H, W), device=device, dtype=x_cond.dtype)
 
@@ -324,16 +355,19 @@ class DDPMInterpolator(DiffusionBase):
 
             abar_t = self.alphas_cumprod[t].clamp(min=eps, max=1 - eps)
             one_m_abar = (1 - abar_t).clamp(min=eps)
-            sqrt_abar   = abar_t.sqrt()[:, None, None, None]
-            sqrt_1mabar = one_m_abar.sqrt()[:, None, None, None]
+            sqrt_abar   = abar_t.sqrt()
+            sqrt_1mabar = one_m_abar.sqrt()
+
+            ca = sqrt_abar.view(B,1,1,1)
+            cb = sqrt_1mabar.view(B,1,1,1)
 
             pred = super().forward(y, x_cond, t_norm)
             if self.predict == "eps":
                 eps_hat = pred
-                x0 = (y - sqrt_1mabar * eps_hat) / sqrt_abar
+                x0 = (y - cb * eps_hat) / ca
             else:  # 'v'
                 v = pred
-                x0 = sqrt_abar * y - sqrt_1mabar * v
+                x0 = ca * y - cb * v
 
             if self.x0_clip is not None:
                 x0 = x0.clamp_(-self.x0_clip, self.x0_clip)
@@ -345,13 +379,12 @@ class DDPMInterpolator(DiffusionBase):
             t_prev = ts[i - 1].expand(B)
             abar_prev = self.alphas_cumprod[t_prev].clamp(min=eps, max=1 - eps)
 
-            # DDIM update
             sigma = eta * (((1 - abar_prev) / (1 - abar_t) * (1 - abar_t / abar_prev)).clamp(min=0).sqrt())
-            dir_xt = ((1 - abar_prev - sigma**2).clamp(min=0).sqrt())[:, None, None, None] * \
-                     (y - sqrt_abar * x0) / sqrt_1mabar
-            y = abar_prev.sqrt()[:, None, None, None] * x0 + dir_xt
+            dir_xt = ((1 - abar_prev - sigma**2).clamp(min=0).sqrt()).view(B,1,1,1) * \
+                     (y - ca * x0) / cb
+            y = abar_prev.sqrt().view(B,1,1,1) * x0 + dir_xt
             if eta > 0:
-                y = y + sigma[:, None, None, None] * torch.randn_like(y)
+                y = y + sigma.view(B,1,1,1) * torch.randn_like(y)
 
         return y
 
@@ -360,13 +393,13 @@ class DDPMInterpolator(DiffusionBase):
     def sample_from_cond(
         self,
         x_cond: torch.Tensor,
-        shape_target: Tuple[int, int, int],
+        shape_target: Tuple[int, int, int],  # (T*C, H, W)
         sampler: str = "ddim",
         eta: float = 0.0,
         steps: int = 50,
         init_y: Optional[torch.Tensor] = None,
         start_t: Optional[int] = None,
-        y0_clean: Optional[torch.Tensor] = None,  # SDEdit clean
+        y0_clean: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
 
         x_cond = self._maybe_float32(x_cond)
@@ -409,16 +442,19 @@ class DDPMInterpolator(DiffusionBase):
 
             abar_t = self.alphas_cumprod[t].clamp(min=eps, max=1 - eps)
             one_m_abar = (1 - abar_t).clamp(min=eps)
-            sqrt_abar   = abar_t.sqrt()[:, None, None, None]
-            sqrt_1mabar = one_m_abar.sqrt()[:, None, None, None]
+            sqrt_abar   = abar_t.sqrt()
+            sqrt_1mabar = one_m_abar.sqrt()
+
+            ca = sqrt_abar.view(B,1,1,1)
+            cb = sqrt_1mabar.view(B,1,1,1)
 
             pred = super().forward(y, x_cond, t_norm)
             if self.predict == "eps":
                 eps_hat = pred
-                x0 = (y - sqrt_1mabar * eps_hat) / sqrt_abar
+                x0 = (y - cb * eps_hat) / ca
             else:
                 v = pred
-                x0 = sqrt_abar * y - sqrt_1mabar * v
+                x0 = ca * y - cb * v
 
             if self.x0_clip is not None:
                 x0 = x0.clamp_(-self.x0_clip, self.x0_clip)
@@ -431,10 +467,10 @@ class DDPMInterpolator(DiffusionBase):
             abar_prev = self.alphas_cumprod[t_prev].clamp(min=eps, max=1 - eps)
 
             sigma = eta * (((1 - abar_prev) / (1 - abar_t) * (1 - abar_t / abar_prev)).clamp(min=0).sqrt())
-            dir_xt = ((1 - abar_prev - sigma**2).clamp(min=0).sqrt())[:, None, None, None] * \
-                     (y - sqrt_abar * x0) / sqrt_1mabar
-            y = abar_prev.sqrt()[:, None, None, None] * x0 + dir_xt
+            dir_xt = ((1 - abar_prev - sigma**2).clamp(min=0).sqrt()).view(B,1,1,1) * \
+                     (y - ca * x0) / cb
+            y = abar_prev.sqrt().view(B,1,1,1) * x0 + dir_xt
             if eta > 0:
-                y = y + sigma[:, None, None, None] * torch.randn_like(y)
+                y = y + sigma.view(B,1,1,1) * torch.randn_like(y)
 
         return y

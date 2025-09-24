@@ -1,7 +1,6 @@
 _data_dir: ${oc.env:DATA_DIR,/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep}
 _root_dir: ${oc.env:ROOT_DIR,/home/users/u101329/p200177_t2/u101329/diffusion-interp}
 _mlflow_dir: ${oc.env:MLFLOW_DIR,/home/users/u101329/p200177_t2/u101329/_mlruns}
-
 _work_dir: ${oc.env:WORK_DIR,${_root_dir}/_work}
 _checkpoints_dir: ${_work_dir}/checkpoints
 
@@ -12,38 +11,13 @@ defaults:
   - trainer: ddp
   - datamodule: meps_npy3
   - model: ddpm_attention
+  - callbacks: default
+  - logger: default
   - _self_
 
-
+logger:
+  run_name: "ddpm-npy-1-year_${now:%Y%m%d_%H%M%S}"
 # Hydra 1.3+ config
 seed: 42
 
 
-
-   
-# Use MLflow as the primary logger
-logger:
-  _target_: lightning.pytorch.loggers.MLFlowLogger
-  experiment_name: "meps-interpolation"
-  run_name: "ddpm-npy-1-year_${now:%Y%m%d_%H%M%S}"
-  tracking_uri: file:${_mlflow_dir}
-  tags:
-    project: "diffusion_interpolation"
-  # requires mlflow >= 2.8.0; if older, just remove this flag
-  synchronous: false
-
-
-callbacks:
-  - _target_: utils.GPUsAssignedCallback
-  - _target_: utils.GPUMemoryMonitorCallback
-    every_n_steps: 50
-  - _target_: lightning.pytorch.callbacks.ModelCheckpoint
-    monitor: val_loss
-    mode: min
-    save_top_k: 3
-    save_last: true
-    filename: "{epoch}-{val_loss:.3f}"
-    dirpath: ${_checkpoints_dir} 
-  - _target_: lightning.pytorch.callbacks.LearningRateMonitor
-    logging_interval: step
-  #- _target_: lightning.pytorch.callbacks.TQDMProgressBar

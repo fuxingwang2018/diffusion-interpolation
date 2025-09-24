@@ -91,15 +91,14 @@ sbatch submit_meps_ddp.sh
 ```
 
 ## Development training run
+ 
 ```bash
 module load env/release/2024.1
 module load Apptainer/1.3.6-GCCcore-13.3.0
 module load git
-
-
 DATA_DIR=/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep
 ROOT_DIR=/home/users/u101329/p200177_t2/u101329/tests/exp-01
-MLFLOW_DIR=/home/users/u101329/p200177_t2/u101329/_mlruns
+MLFLOW_DIR=/home/users/u101329/p200177_t2/u101329/_mlruns_apptainer
 SIF_FILE=../containers/container.sif 
 apptainer exec \
     --nv \
@@ -118,6 +117,6 @@ apptainer exec \
         export MLFLOW_DIR=/_mlruns
         [ -d $WORK_DIR ] || mkdir -p $WORK_DIR
         [ -d $MLFLOW_DIR ] || mkdir -p $MLFLOW_DIR
-        python train.py
+        python test_meps_numpy_datamodule.py #train.py 
     '
 ```

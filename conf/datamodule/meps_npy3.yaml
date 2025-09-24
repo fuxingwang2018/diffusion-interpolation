@@ -2,7 +2,7 @@
 
 _target_: data.MEPSNPYDataModule
 # Data
-root: ${_data_dir}/samples_hp                              # link for tier1 data for high performance
+root: ${_data_dir}/samples                              # link for tier1 data for high performance
 sequences_csv: ${_data_dir}/sequences-test3.csv            # grouped CSV with JSON columns
 # Which members / leads to include (null = all present in CSV)
 members: null                                      # e.g. [0,1,2]
@@ -12,8 +12,6 @@ require_all_selected_members: true                 # skip windows missing any re
 # Sample building
 sample_mode: per_member                              # ensemble | per_member
 file_channel_indices: [0, 1, 2]                    # pick C channels from each (4,H,W)
-stack_time_on_channel: true                        # fuse time into channels
-stack_member_on_channel: true                     # (ensemble only) keep member dim
 # Normalization
 normalize: symrange                                    # none | zscore | symrange
 stats_npz: ${_data_dir}/sequences-stats-test3.npz

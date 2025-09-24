@@ -1,0 +1,14 @@
+ 
+- _target_: utils.GPUsAssignedCallback
+- _target_: utils.GPUMemoryMonitorCallback
+  every_n_steps: 50
+- _target_: lightning.pytorch.callbacks.ModelCheckpoint
+  monitor: val_loss
+  mode: min
+  save_top_k: 3
+  save_last: true
+  filename: "{epoch}-{val_loss:.3f}"
+  dirpath: ${_checkpoints_dir} 
+- _target_: lightning.pytorch.callbacks.LearningRateMonitor
+  logging_interval: step
+#- _target_: lightning.pytorch.callbacks.TQDMProgressBar
