@@ -15,11 +15,9 @@ class EDMInterpolator(DiffusionBase):
 
     def __init__(
         self,
-        # channels/extras/UNet/logging are handled by DiffusionBase
+        # channels/UNet/logging are handled by DiffusionBase
         cond_channels: int,
         target_channels: int,
-        extra_coord_channels: bool = False,
-        extra_phys_time_scalar: Optional[float] = None,
         unet_base: int = 64,
         time_embed_dim: int = 256,
 
@@ -54,8 +52,6 @@ class EDMInterpolator(DiffusionBase):
         super().__init__(
             cond_channels=cond_channels,
             target_channels=target_channels,
-            extra_coord_channels=extra_coord_channels,
-            extra_phys_time_scalar=extra_phys_time_scalar,
             unet_base=unet_base,
             time_embed_dim=time_embed_dim,
 

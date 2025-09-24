@@ -3,45 +3,38 @@ from typing import Any, Dict, List, Optional, Tuple
 import warnings
 import torch
 from torch import nn
-import torch.nn.functional as F
 import lightning as L
 import os
 
-from .common import exists, sinusoidal_embedding, make_coord_grid, UNet2D
+from .common import exists, sinusoidal_embedding, UNet2D
 
 class DiffusionBase(L.LightningModule):
     """
-    Shared UNet backbone, extras (coords/time), and end-of-epoch plotting/saving.
+    Shared UNet backbone and end-of-epoch plotting/saving.
     This version supports 4-D BCHW and 5-D BTCHW inputs.
 
     Expected dataloader shapes:
       - x_cond: [B, 2, C, H, W]  (two endpoint frames, each with C channels)
       - y     : [B, T, C, H, W]  (T target frames, each with C channels)
 
-    What the network actually sees (internally):
+    What the network sees internally (time fused onto channels):
       - x_cond_flat: [B, 2*C, H, W]
       - y_flat     : [B, T*C, H, W]
 
-    Notes:
-      • Set model hyperparams to flattened channel counts:
-          cond_channels   = 2 * C
-          target_channels = T * C
-      • The forward() will reshape 5-D inputs to BCHW, run the UNet, and
-        reshape outputs back to BTCHW for convenience.
-      • The diffusion step embedding (t_embed_scalar) is still a (B,) vector
-        and refers to the *denoiser* step, not physical time.
-      • If extra_phys_time_scalar is provided, a single (B,1,H,W) map is
-        concatenated — same value for all target times.
+    Notes
+    -----
+    • Construct the model with *flattened* channel counts:
+        cond_channels   = 2 * C
+        target_channels = T * C
+    • The diffusion step embedding (t_embed_scalar) is a (B,) vector referring to
+      the *denoiser* step (e.g., normalized t for DDPM), not the physical time.
     """
 
     def __init__(
         self,
-        # channels (must be flattened counts if your data is BTCHW):
-        cond_channels: int,     # e.g., cond_channels = 2*C
-        target_channels: int,   # e.g., target_channels = T*C
-        # extras
-        extra_coord_channels: bool = False,
-        extra_phys_time_scalar: Optional[float] = None,
+        # flattened channels:
+        cond_channels: int,     # expect 2*C
+        target_channels: int,   # expect T*C
         # UNet
         unet_base: int = 64,
         time_embed_dim: int = 256,
@@ -66,20 +59,14 @@ class DiffusionBase(L.LightningModule):
         self.scheduler_cfg = scheduler_cfg
         self.fig_cfg: Dict[str, Any] = figures_cfg or {}
 
-        # These are the *flattened* channel counts the UNet will actually see
-        self.cond_channels   = int(cond_channels)     # expect 2*C
-        self.target_channels = int(target_channels)   # expect T*C
+        # flattened channel counts (what UNet actually receives)
+        self.cond_channels   = int(cond_channels)     # 2*C
+        self.target_channels = int(target_channels)   # T*C
 
-        # extras
-        self.add_coords = bool(extra_coord_channels)          # adds 2 channels if True
-        self.phys_time_scalar = extra_phys_time_scalar        # adds 1 channel if given
-        self.init_with_ones = init_with_ones
-
-        # UNet io channels
+ 
+        # UNet I/O channels
         in_ch = self.target_channels + self.cond_channels
-        if self.add_coords: in_ch += 2
-        if exists(self.phys_time_scalar): in_ch += 1
-
+ 
         self.unet = UNet2D(
             in_ch=in_ch,
             out_ch=self.target_channels,
@@ -91,10 +78,9 @@ class DiffusionBase(L.LightningModule):
             attn_levels=tuple(attn_levels or ("mid",)),
         )
 
-        # small runtime guard so we only print mismatch help once
-        self._shape_checked_once = False
+        self._shape_checked_once = False  # to print a helpful error only once
 
-    # -------- small helpers --------
+    # -------- shape helpers --------
     @staticmethod
     def _flatten_time_to_channel(x: torch.Tensor) -> Tuple[torch.Tensor, Optional[Tuple[int, int]]]:
         """
@@ -107,7 +93,7 @@ class DiffusionBase(L.LightningModule):
             # BTCHW -> BCHW
             B, T, C, H, W = x.shape
             return x.reshape(B, T * C, H, W), (T, C)
-        raise ValueError(f"Expected 4-D (BCHW) or 5-D (BTCHW), got shape {tuple(x.shape)}")
+        raise ValueError(f"Expected 4-D (BCHW) or 5-D (BTCHW), got {tuple(x.shape)}")
 
     @staticmethod
     def _unflatten_channel_to_time(y: torch.Tensor, tc: Optional[Tuple[int, int]]) -> torch.Tensor:
@@ -122,64 +108,45 @@ class DiffusionBase(L.LightningModule):
             raise RuntimeError(f"Cannot reshape output with C={TC} to (T={T}, C={C}).")
         return y.view(B, T, C, H, W)
 
-    def _extras(self, ref_bchw: torch.Tensor) -> torch.Tensor:
-        """
-        Build extras aligned with a BCHW reference tensor.
-        Returns (B, C_extra, H, W)
-        """
-        B, _, H, W = ref_bchw.shape
-        extras: List[torch.Tensor] = []
-        if self.add_coords:
-            grid = make_coord_grid(H, W, ref_bchw.device)           # (2,H,W)
-            extras.append(grid.unsqueeze(0).expand(B, -1, -1, -1))  # (B,2,H,W)
-        if exists(self.phys_time_scalar):
-            tchan = torch.full((B, 1, H, W), float(self.phys_time_scalar), device=ref_bchw.device)
-            extras.append(tchan)
-        if not extras:
-            return torch.zeros((B, 0, H, W), device=ref_bchw.device, dtype=ref_bchw.dtype)
-        return torch.cat(extras, dim=1)
 
     # -------- forward --------
     def forward(self, y_noisy: torch.Tensor, x_cond: torch.Tensor, t_embed_scalar: torch.Tensor) -> torch.Tensor:
         """
         Inputs (from dataloader / training loop):
           y_noisy: [B, T, C, H, W]  or [B, T*C, H, W]
-          x_cond : [B, 2, C, H, W]  or [B, 2*C, H, W]
-          t_embed_scalar: [B,]      diffusion step in [0,1] (for DDPM) or log-σ (for EDM)
+          x_cond : [B,  2, C, H, W] or [B, 2*C, H, W]
+          t_embed_scalar: [B,]      diffusion step (denoiser-time), e.g. normalized t for DDPM
 
-        Internally we use BCHW for the UNet:
-          y_noisy_bchw = reshape(y_noisy)  # [B, T*C, H, W]
-          x_cond_bchw  = reshape(x_cond)   # [B, 2*C, H, W]
-          inp = concat([y_noisy_bchw, x_cond_bchw, extras], dim=1)
+        Internally:
+          y_bchw = reshape(y_noisy)  # [B, T*C, H, W]
+          x_bchw = reshape(x_cond)   # [B, 2*C, H, W]
+          inp = concat([y_bchw, x_bchw], dim=1)
 
         Output:
           pred with the same time layout as y_noisy:
             - If input was BTCHW -> returns BTCHW
             - If input was BCHW  -> returns BCHW
         """
-        # 1) Time embedding
+        # 1) time/step embedding for the denoiser
         time_embed_dim = self.unet.time_mlp[0].in_features
         t_emb = sinusoidal_embedding(t_embed_scalar, time_embed_dim)  # (B, time_embed_dim)
 
-        # 2) Flatten time to channels if needed
-        y_bchw, y_tc = self._flatten_time_to_channel(y_noisy)  # y_tc = (T,C) or None
-        x_bchw, _    = self._flatten_time_to_channel(x_cond)   # endpoints -> [B, 2*C, H, W]
+        # 2) flatten time to channels if needed
+        y_bchw, y_tc = self._flatten_time_to_channel(y_noisy)  # y_tc=(T,C) or None
+        x_bchw, _    = self._flatten_time_to_channel(x_cond)   # [B, 2*C, H, W]
 
-        # 3) Extras on BCHW
-        extras = self._extras(y_bchw)                           # (B, Cextra, H, W)
+    
+        # 4) concatenate
+        inp = torch.cat([y_bchw, x_bchw], dim=1)        # (B, T*C + 2*C , H, W)
 
-        # 4) Concatenate
-        inp = torch.cat([y_bchw, x_bchw, extras], dim=1)        # (B, T*C + 2*C + Cextra, H, W)
-
-        # 5) One-time helpful check for channel configuration mismatches
+        # 5) one-time helpful config check
         if not self._shape_checked_once:
             expected_in = self.unet.in_conv.in_channels
             if inp.shape[1] != expected_in:
                 msg = (
-                    f"[Shape mismatch] The UNet was built for in_ch={expected_in}, "
-                    f"but current input has {inp.shape[1]} channels "
-                    f"(y={y_bchw.shape[1]} + x={x_bchw.shape[1]} + extras={extras.shape[1]}).\n"
-                    "Reminder: when your data is BTCHW, you must pass *flattened* counts when constructing the model:\n"
+                    f"[Shape mismatch] UNet in_ch={expected_in}, but input has {inp.shape[1]} channels "
+                    f"(y={y_bchw.shape[1]} + x={x_bchw.shape[1]}).\n"
+                    "Reminder: if your data is BTCHW, pass *flattened* counts to the constructor:\n"
                     "  cond_channels   = 2 * C\n"
                     "  target_channels = T * C\n"
                     "Example: C=3, T=5 -> cond_channels=6, target_channels=15."
@@ -187,10 +154,10 @@ class DiffusionBase(L.LightningModule):
                 raise RuntimeError(msg)
             self._shape_checked_once = True
 
-        # 6) UNet
+        # 6) UNet forward
         pred_bchw = self.unet(inp, t_emb)                       # (B, T*C, H, W)
 
-        # 7) Restore time dimension if the input had it
+        # 7) restore time dimension if needed
         return self._unflatten_channel_to_time(pred_bchw, y_tc)
 
     # -------- training / validation cache wrapper --------
@@ -203,7 +170,7 @@ class DiffusionBase(L.LightningModule):
     def on_load_checkpoint(self, checkpoint) -> None:
         self.print("Model Restored from checkpoint")
 
-    # -------- plotting/saving at val end (compact names + colorbars) --------
+    # -------- plotting/saving at val end (C rows × (T+2) cols, minimal titles) --------
     def on_validation_epoch_end(self) -> None:
         import re, hashlib
         import numpy as np
@@ -265,26 +232,39 @@ class DiffusionBase(L.LightningModule):
         m_str = _member_short(meta.get("member", meta.get("member_index", "na")))
 
         # tensors to device
-        x_cond = x_cond.to(self.device)
-        y_gt   = y_gt.to(self.device)
+        x_cond = x_cond.to(self.device)   # [B,2,C,H,W] or [B,2*C,H,W]
+        y_gt   = y_gt.to(self.device)     # [B,T,C,H,W] or [B,T*C,H,W]
 
-        # Build a shape_target the sampler can understand.
-        # Many samplers expect BCHW channel counts; if y_gt is BTCHW, pass T*C.
+        # Build a shape_target for the sampler (often expects BCHW counts).
         if y_gt.dim() == 5:
             _, T, C, H, W = y_gt.shape
-            shape_target_for_sampler = (T * C, H, W)   # flattened for samplers that expect BCHW
+            shape_target_for_sampler = (T * C, H, W)
         else:
             _, C, H, W = y_gt.shape
+            T = None  # unknown here
             shape_target_for_sampler = (C, H, W)
 
+        # Generate prediction with the subclass sampler
         with torch.amp.autocast("cuda", enabled=False):
             y_pred = self.sample_from_cond(x_cond, shape_target=shape_target_for_sampler)  # subclass-defined
 
-        # If sampler returned BCHW but GT is BTCHW, reshape prediction for parity.
-        if y_gt.dim() == 5 and y_pred.dim() == 4:
-            B, TC, H, W = y_pred.shape
-            assert TC == T * C, f"Sampler returned {TC} channels but GT implies {T*C}."
-            y_pred = y_pred.view(B, T, C, H, W)
+        # Make shapes consistent for plotting: ensure BTCHW for y_gt and y_pred
+        def _ensure_btchw(t: torch.Tensor, fallback_TC: Optional[int] = None) -> torch.Tensor:
+            if t.dim() == 5:
+                return t
+            # BCHW -> BTCHW by splitting channels to (T,C) using y_gt guide
+            B, TC, H, W = t.shape
+            if y_gt.dim() == 5:
+                _, Ty, Cy, _, _ = y_gt.shape
+                assert TC == Ty * Cy, f"Expected {Ty*Cy} channels, got {TC}."
+                return t.view(B, Ty, Cy, H, W)
+            # fallback not supported without (T,C)
+            if fallback_TC is not None:
+                raise RuntimeError("Cannot infer (T,C) for BCHW tensor; provide BTCHW ground truth.")
+            return t
+
+        y_gt_bt = _ensure_btchw(y_gt)
+        y_pred_bt = _ensure_btchw(y_pred)
 
         # plotting
         try:
@@ -296,39 +276,94 @@ class DiffusionBase(L.LightningModule):
             self._val_cache.clear()
             return
 
-        def _as_bchw(t: torch.Tensor) -> torch.Tensor:
-            if t.dim() == 5:  # BTCHW -> BCHW for visualization
-                B, T, C, H, W = t.shape
-                t = t.view(B, T * C, H, W)
-            return t
+        # ---- grid builder: rows=channels (C), cols=T+2 (start, internals, end)
+        def _grid_btchw(x_cond_bt: torch.Tensor, y_bt: torch.Tensor, meta: dict, suptitle: str):
+            """
+            x_cond_bt: [B, 2, C, H, W]   (start,end)
+            y_bt     : [B, T, C, H, W]   (internals)
+            Titles per subplot: 'ch=<c> lt=<lead_time>'
+            """
+            assert x_cond_bt.dim() == 5 and x_cond_bt.shape[1] == 2, "x_cond must be [B,2,C,H,W]"
+            assert y_bt.dim() == 5 and x_cond_bt.shape[2] == y_bt.shape[2], "channel count mismatch"
 
-        def _grid(t: torch.Tensor, title: str, max_ch=3):
-            t = _as_bchw(t).detach().float().cpu()
-            b, c, h, w = t.shape
-            ch = min(c, max_ch)
-            fig, axes = plt.subplots(1, ch, figsize=(ch * 2.6, 2.6))
-            if ch == 1:
+            B, Tloc, C, H, W = y_bt.shape
+            # lead times per column: [start, internals..., end]
+            lts = meta.get("lead_times", None)
+            if isinstance(lts, (list, tuple)) and len(lts) == Tloc + 2:
+                col_lts = list(lts)
+            else:
+                col_lts = list(range(Tloc + 2))  # fallback 0..T+1
+
+            # first item for display
+            x0 = x_cond_bt[0].detach().float().cpu()  # [2,C,H,W]
+            y0 = y_bt[0].detach().float().cpu()       # [T,C,H,W]
+
+            cols = Tloc + 2
+            rows = C
+            fig, axes = plt.subplots(rows, cols, figsize=(cols * 2.1, rows * 2.1))
+            if rows == 1:
                 axes = [axes]
-            for i in range(ch):
-                im = axes[i].imshow(t[0, i].numpy(), cmap="viridis")
-                axes[i].axis("off")
-                axes[i].set_title(f"{title} ch#{i}", fontsize=8)
-                fig.colorbar(im, ax=axes[i], fraction=0.046, pad=0.04)
-            fig.tight_layout()
+            if cols == 1:
+                axes = [[ax] for ax in axes]
+
+            for cidx in range(C):
+                start_img = x0[0, cidx].numpy()
+                end_img   = x0[1, cidx].numpy()
+                internals = y0[:, cidx].numpy()  # [T,H,W]
+
+                # consistent color scale per channel
+
+                # col 0: start
+                im0 = axes[cidx][0].imshow(start_img, cmap="viridis", vmin=-1, vmax=1) # set vmin and vmax here 
+                axes[cidx][0].axis("off")
+                axes[cidx][0].set_title(f"ch={cidx} lt={col_lts[0]}", fontsize=8)
+
+                # cols 1..T: internals
+                for k in range(Tloc):
+                    vmin = float(internals[k].min())
+                    vmax = float(internals[k].max())
+                    if vmin == vmax:
+                        vmin, vmax = float(vmin - 1e-6), float(vmax + 1e-6)
+
+                    ax = axes[cidx][1 + k]
+                    ax.imshow(internals[k], cmap="viridis", vmin=-1, vmax=1)
+                    ax.axis("off")
+                    ax.set_title(f"ch={cidx} lt={col_lts[1 + k]} {vmin:.2f}-{vmax:.2f}", fontsize=8)
+
+                # col T+1: end
+                axes[cidx][Tloc + 1].imshow(end_img, cmap="viridis", vmin=-1, vmax=1)
+                axes[cidx][Tloc + 1].axis("off")
+                axes[cidx][Tloc + 1].set_title(f"ch={cidx} lt={col_lts[Tloc + 1]}", fontsize=8)
+
+                # one colorbar per row
+                fig.colorbar(im0, ax=axes[cidx], orientation="vertical", fraction=0.02, pad=0.01)
+
+            # minimalist top title (optional)
+            if suptitle:
+                fig.suptitle(suptitle, fontsize=9)
+            fig.tight_layout(rect=[0, 0, 1, 0.96])
             return fig
 
-        lt = meta.get("lead_times")
-        lt_str = f" | leads={list(lt)}" if isinstance(lt, (list, tuple)) and lt else ""
-        title_suffix = f" ({date_key}, {window_key}, {m_str}){lt_str}"
+        # prepare inputs for grid: ensure x_cond is [B,2,C,H,W]
+        if x_cond.dim() == 4:  # [B,2*C,H,W] -> [B,2,C,H,W]
+            B, Cxc, Hc, Wc = x_cond.shape
+            # infer C from y_gt_bt
+            _, Tloc, Cinf, _, _ = y_gt_bt.shape
+            assert Cxc == 2 * Cinf, f"Cannot split x_cond channels ({Cxc}) into (2,C={Cinf})."
+            x_cond_bt = x_cond.view(B, 2, Cinf, Hc, Wc)
+        else:
+            x_cond_bt = x_cond
 
-        title_suffix = f" ({date_key}, {window_key}, {m_str}){lt_str}"
-
-
-        figs = [
-            (_grid(x_cond, "cond endpoints" + title_suffix), "cond"),
-            (_grid(y_pred, "pred internals" + title_suffix), "pred"),
-            (_grid(y_gt,   "gt internals"   + title_suffix), "gt"),
-        ]
+        # Draw figures
+        try:
+            cond_fig = _grid_btchw(x_cond_bt, y_gt_bt, meta, "cond endpoints")
+            pred_fig = _grid_btchw(x_cond_bt, y_pred_bt, meta, "pred internals")
+            gt_fig   = _grid_btchw(x_cond_bt, y_gt_bt, meta, "gt internals")
+            figs = [(cond_fig, "cond"), (pred_fig, "pred"), (gt_fig, "gt")]
+        except Exception as e:
+            warnings.warn(f"Plotting failed: {e}")
+            self._val_cache.clear()
+            return
 
         # folders & filenames
         root = self._fig_root()
@@ -356,12 +391,12 @@ class DiffusionBase(L.LightningModule):
 
         if bool(self.hparams.sample_save_npz):
             try:
-                # Save in the *natural* shapes (BTCHW if present)
+                # Save in natural shapes (BTCHW)
                 np.savez_compressed(
                     npz_path,
-                    cond=x_cond[0].detach().cpu().numpy(),
-                    pred=y_pred[0].detach().cpu().numpy(),
-                    gt=y_gt[0].detach().cpu().numpy(),
+                    cond=x_cond_bt[0].detach().cpu().numpy(),
+                    pred=y_pred_bt[0].detach().cpu().numpy(),
+                    gt=y_gt_bt[0].detach().cpu().numpy(),
                     date=str(meta.get("date")),
                     window=str(window_raw),
                     member=str(_to_scalar(meta.get("member", meta.get("member_index", "na")))),

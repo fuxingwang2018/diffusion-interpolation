@@ -33,13 +33,7 @@ def sinusoidal_embedding(t: torch.Tensor, dim: int) -> torch.Tensor:
         emb = F.pad(emb, (0, 1))
     return emb
 
-def make_coord_grid(h: int, w: int, device: torch.device) -> torch.Tensor:
-    """Return (2, H, W) normalized coords in [-1,1]."""
-    ys = torch.linspace(-1., 1., steps=h, device=device)
-    xs = torch.linspace(-1., 1., steps=w, device=device)
-    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
-    return torch.stack([xx, yy], dim=0)
-
+ 
 
 # -------------------------
 # very compact U-Net with FiLM from time/noise embedding
@@ -83,7 +77,7 @@ class Up(nn.Module):
 class UNet2D(nn.Module):
     """
     Tiny U-Net with FiLM from time/noise embedding.
-    in_ch: channels of [noisy_target || conditioning || optional extras]
+    in_ch: channels of [noisy_target || conditioning]
     out_ch: channels of target only (predict noise on targets)
     """
     def __init__(self, in_ch: int, out_ch: int, base: int = 64, emb_dim: int = 256):
@@ -148,8 +142,6 @@ class EDMInterpolator(L.LightningModule):
         # channels
         cond_channels: int,
         target_channels: int,
-        extra_coord_channels: bool = False,             # add (x,y) coords as two channels
-        extra_phys_time_scalar: Optional[float] = None, # add a constant scalar channel
 
         # U-Net
         unet_base: int = 64,
@@ -189,16 +181,12 @@ class EDMInterpolator(L.LightningModule):
         self.cond_channels = int(cond_channels)
         self.target_channels = int(target_channels)
 
-        # extras
-        self.add_coords = bool(extra_coord_channels)
-        self.phys_time_scalar = extra_phys_time_scalar
 
         # build UNet
         in_ch = self.target_channels + self.cond_channels
-        if self.add_coords:
-            in_ch += 2
-        if exists(self.phys_time_scalar):
-            in_ch += 1
+
+
+
 
         self.unet = UNet2D(in_ch=in_ch, out_ch=self.target_channels,
                            base=unet_base, emb_dim=time_embed_dim)
@@ -308,22 +296,6 @@ class EDMInterpolator(L.LightningModule):
         sigma = sigma.clamp(self.hparams.sigma_min, self.hparams.sigma_max)
         return sigma
 
-    def add_extras(self, x_like: torch.Tensor) -> torch.Tensor:
-        """
-        Build optional extra channels (coords, phys_time_scalar) to concat with inputs.
-        Returns (B, C_extra, H, W) or zeros if none.
-        """
-        B, _, H, W = x_like.shape
-        extras: List[torch.Tensor] = []
-        if self.add_coords:
-            grid = make_coord_grid(H, W, x_like.device)              # (2,H,W)
-            extras.append(grid.unsqueeze(0).expand(B, -1, -1, -1))   # (B,2,H,W)
-        if exists(self.phys_time_scalar):
-            tchan = torch.full((B, 1, H, W), float(self.phys_time_scalar), device=x_like.device)
-            extras.append(tchan)
-        if not extras:
-            return torch.zeros((B, 0, H, W), device=x_like.device, dtype=x_like.dtype)
-        return torch.cat(extras, dim=1)
 
     # ------------- forward = one denoising pass -------------
     def forward(self, y_noisy: torch.Tensor, x_cond: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
@@ -333,8 +305,7 @@ class EDMInterpolator(L.LightningModule):
         """
         time_embed_dim = self.unet.time_mlp[0].in_features
         t_emb = sinusoidal_embedding(sigma.log(), time_embed_dim)  # (B, time_embed_dim)
-        extras = self.add_extras(y_noisy)                          # (B, Cextra, H, W)
-        inp = torch.cat([y_noisy, x_cond, extras], dim=1)          # concat along channels
+        inp = torch.cat([y_noisy, x_cond], dim=1)          # concat along channels
         return self.unet(inp, t_emb)
 
     # ------------- training / validation -------------

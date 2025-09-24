@@ -26,12 +26,7 @@ def sinusoidal_embedding(t: torch.Tensor, dim: int) -> torch.Tensor:
         emb = F.pad(emb, (0, 1))
     return emb
 
-def make_coord_grid(h: int, w: int, device: torch.device) -> torch.Tensor:
-    """Return (2, H, W) normalized coords in [-1,1]."""
-    ys = torch.linspace(-1., 1., steps=h, device=device)
-    xs = torch.linspace(-1., 1., steps=w, device=device)
-    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
-    return torch.stack([xx, yy], dim=0)
+ 
 
 # ---------- compact U-Net with FiLM ----------
 
@@ -120,7 +115,7 @@ class SelfAttention2D(nn.Module):
 class UNet2D(nn.Module):
     """
     Tiny U-Net with FiLM from time/noise embedding + optional 2D attention.
-    in_ch: channels of [noisy_target || conditioning || optional extras]
+    in_ch: channels of [noisy_target || conditioning ]
     out_ch: channels of target only (predict noise on targets)
     """
     def __init__(

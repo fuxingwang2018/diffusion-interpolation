@@ -11,8 +11,6 @@ attn_dim_head: 16
 attn_levels: ["mid", "down2"]   # good default: bottleneck + next coarsest level
 
 # UNet backbone
-extra_coord_channels: true
-extra_phys_time_scalar: null
 unet_base: 64
 time_embed_dim: 256
 force_float32: True

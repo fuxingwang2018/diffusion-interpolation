@@ -34,9 +34,7 @@ _target_: models.edm.EDMInterpolator
 cond_channels: 6
 target_channels: 15
 
-# extras & UNet
-extra_coord_channels: true
-extra_phys_time_scalar: null
+# UNet
 unet_base: 64
 time_embed_dim: 256
 
@@ -85,9 +83,7 @@ _target_: models.edm.EDMInterpolator
 cond_channels: 6
 target_channels: 15
 
-# extras & UNet
-extra_coord_channels: true
-extra_phys_time_scalar: null
+# UNet
 unet_base: 64
 time_embed_dim: 256
 
@@ -135,9 +131,7 @@ _target_: models.ddpm.DDPMInterpolator
 cond_channels: 6
 target_channels: 15
 
-# extras & UNet
-extra_coord_channels: true
-extra_phys_time_scalar: null
+# UNet
 unet_base: 64
 time_embed_dim: 256
 
@@ -182,9 +176,7 @@ _target_: models.ddpm.DDPMInterpolator
 cond_channels: 6
 target_channels: 15
 
-# extras & UNet
-extra_coord_channels: true
-extra_phys_time_scalar: null
+#  UNet
 unet_base: 64
 time_embed_dim: 256
 
@@ -228,9 +220,8 @@ _target_: models.ddpm.DDPMInterpolator
 cond_channels: 6
 target_channels: 15
 
-# extras & UNet
-extra_coord_channels: true
-extra_phys_time_scalar: null
+# UNet
+
 unet_base: 64
 time_embed_dim: 256
 
@@ -274,9 +265,8 @@ _target_: models.ddpm.DDPMInterpolator
 cond_channels: 6
 target_channels: 15
 
-# extras & UNet
-extra_coord_channels: true
-extra_phys_time_scalar: null
+# & UNet
+ 
 unet_base: 64
 time_embed_dim: 256
 
