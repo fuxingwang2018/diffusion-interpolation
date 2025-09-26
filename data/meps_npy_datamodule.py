@@ -27,7 +27,6 @@ def _ensure_abs(p: Union[str, Path], root: Union[str, Path]) -> str:
 # ============================================================
 # CSV → in-memory grouped ensemble windows
 # ============================================================
-
 def read_grouped_ensemble_windows(
     csv_path: Union[str, Path],
     root: Union[str, Path],
@@ -37,20 +36,23 @@ def read_grouped_ensemble_windows(
     require_all_selected_members: bool = True,
 ) -> List[Dict[str, Any]]:
     """
-    Read a *grouped* sequences CSV where the following columns contain JSON arrays:
-      - Members:      list[int]
-      - LeadTimes:    list[int]    (ascending is not required; we sort)
-      - MemberPaths:  list[list[str]] with shape (M, T)
+    Read a grouped sequences CSV produced by the *merged* pipeline.
 
-    Other useful columns (kept as-is if present): Date, Window, StartValidTime, EndValidTime.
+    Required JSON columns:
+      - Members:       list[int]
+      - LeadTimes:     list[int]     (the full set stored in the merged file, in order)
+      - MemberMerged:  list[str]     (one merged path per member; shape (M,))
 
-    Returns a list of normalized records (dict) per (Date, Window) like:
+    Optional passthrough columns: Date, Window, StartValidTime, EndValidTime.
+
+    Returns a list of records per (Date, Window):
       {
         "date": str | None,
         "window": str | None,
-        "members": List[int],                  # after filtering, original order preserved
-        "lead_times": List[int],               # after filtering, sorted ascending
-        "member_paths": List[List[str]],       # shape (M, T), absolute paths
+        "members": List[int],             # possibly filtered, CSV order preserved
+        "lead_times": List[int],          # filtered & sorted ascending
+        "lead_indices": List[int],        # indices into time axis of merged array
+        "member_files": List[str],        # one merged file path per selected member
         "start_valid_time": Any | None,
         "end_valid_time": Any | None,
       }
@@ -61,9 +63,9 @@ def read_grouped_ensemble_windows(
     for _, row in df.iterrows():
         members = row.get("Members")
         leads = row.get("LeadTimes")
-        mpaths = row.get("MemberPaths")
+        mmerged = row.get("MemberMerged")
 
-        # Optional columns (pass-through; may be NaN)
+        # Optional columns (pass-through)
         date = row.get("Date")
         window = row.get("Window")
         start_valid_time = row.get("StartValidTime")
@@ -74,24 +76,31 @@ def read_grouped_ensemble_windows(
             members = json.loads(members)
         if isinstance(leads, str):
             leads = json.loads(leads)
-        if isinstance(mpaths, str):
-            mpaths = json.loads(mpaths)
+        if isinstance(mmerged, str):
+            mmerged = json.loads(mmerged)
 
-        if not isinstance(members, (list, tuple)) or not isinstance(leads, (list, tuple)) or not isinstance(mpaths, (list, tuple)):
+        if not isinstance(members, (list, tuple)) or not isinstance(leads, (list, tuple)) or not isinstance(mmerged, (list, tuple)):
             continue  # malformed row
 
-        # Select and sort lead times
-        lt_sel = list(int(x) for x in leads)
+        # Original lead order (as in merged file time axis)
+        leads_all = [int(x) for x in leads]
+
+        # Apply optional lead filter -> indices into leads_all
         if leads_filter is not None:
             keep = set(int(x) for x in leads_filter)
-            lt_sel = [lt for lt in lt_sel if lt in keep]
-        lt_sel = sorted(lt_sel)
+            lead_times = [lt for lt in leads_all if lt in keep]
+        else:
+            lead_times = list(leads_all)
 
         # Need endpoints; optionally internals
-        if len(lt_sel) < 2:
+        if len(lead_times) < 2:
             continue
-        if require_internal_targets and len(lt_sel) < 3:
+        if require_internal_targets and len(lead_times) < 3:
             continue
+
+        # Build index mapping: lead -> position in merged file time axis
+        lt2i = {lt: i for i, lt in enumerate(leads_all)}
+        lead_indices = [lt2i[lt] for lt in lead_times]  # positions we’ll slice
 
         # Filter members (preserve CSV order)
         if members_filter is None:
@@ -102,27 +111,26 @@ def read_grouped_ensemble_windows(
             if require_all_selected_members and (set(req) - set(mem_sel)):
                 continue  # some requested member missing
 
-        # Align paths to selected leads and members
-        lt2i = {int(lt): i for i, lt in enumerate(leads)}
+        # Align merged file paths to selected members
         m2i = {int(m): i for i, m in enumerate(members)}
-
-        member_paths: List[List[str]] = []
+        member_files = []
         for m in mem_sel:
             mi = m2i[m]
-            row_paths = [mpaths[mi][lt2i[lt]] for lt in lt_sel]
-            member_paths.append([_ensure_abs(p, root) for p in row_paths])
+            member_files.append(_ensure_abs(mmerged[mi], root))
 
         out.append({
             "date": date if pd.notna(date) else None,
             "window": window if pd.notna(window) else None,
             "members": mem_sel,
-            "lead_times": lt_sel,
-            "member_paths": member_paths,     # (M, T)
+            "lead_times": lead_times,         # filtered set (ascending b/c we kept order)
+            "lead_indices": lead_indices,     # indices into time axis of merged array
+            "member_files": member_files,     # one merged file per selected member
             "start_valid_time": start_valid_time if pd.notna(start_valid_time) else None,
             "end_valid_time": end_valid_time if pd.notna(end_valid_time) else None,
         })
 
     return out
+
 
 
 # ============================================================
@@ -231,20 +239,15 @@ class Normalizer:
 
 class MEPSWindowDataset(Dataset):
     """
-    Create (x, y, meta) samples from grouped ensemble windows.
+    Create (x, y, meta) samples from grouped ensemble windows, loading from *merged* files.
 
-    Two sample modes:
+    sample_mode="ensemble":
+        x: (M, 2, C, H, W)   -> first & last frames in the selected lead_times
+        y: (M, T-2, C, H, W) -> internal frames
 
-    1) sample_mode="ensemble": one sample per (date, window) keeping all members.
-  
-           x shape: (M, 2, C, H, W)
-           y shape: (M, T-2, C, H, W)
-
- 
-
-    2) sample_mode="per_member": one sample per (date, window, member).
-           x shape: (2, C, H, W)
-           y shape: (T-2, C, H, W)
+    sample_mode="per_member":
+        x: (2, C, H, W)
+        y: (T-2, C, H, W)
     """
 
     def __init__(
@@ -310,23 +313,47 @@ class MEPSWindowDataset(Dataset):
 
     # ---------- internal helpers ----------
 
-    def _load_sel(self, path: str) -> np.ndarray:
+    def _load_merged_sel(self, path: str, time_indices: Sequence[int]) -> np.ndarray:
         """
-        Load a .npy of shape (>=C, H, W), select channels, normalize, return (C, H, W).
+        Load a merged .npy and return (T', C, H, W) for selected time indices,
+        then select channels -> (T', C_sel, H, W).
+
+        Assumes merged shape is (T, C, H, W). If you used a different merge axis,
+        adjust the indexing/moveaxis accordingly.
         """
         arr = np.load(path, mmap_mode="r" if self.mmap else None, allow_pickle=False)
-        if arr.ndim != 3 or arr.shape[0] < max(self.chan_idx) + 1:
-            raise ValueError(f"Expected (>=C,H,W), got {arr.shape} @ {path}")
-        x = arr[np.asarray(self.chan_idx, dtype=int), ...]
-        x = self.norm.apply(x)
-        return x
+        if arr.ndim != 4:
+            raise ValueError(f"Expected merged (T,C,H,W), got {arr.shape} @ {path}")
+
+        # subset time
+        tsel = np.asarray(time_indices, dtype=int)
+        a = arr[tsel, ...]  # (T', C, H, W)
+
+        # select channels
+        ci = np.asarray(self.chan_idx, dtype=int)
+        if a.shape[1] <= int(ci.max()):
+            raise ValueError(f"Channel index out of range for shape {a.shape} @ {path}")
+        a = a[:, ci, :, :]  # (T', C_sel, H, W)
+
+        # normalize per frame (Normalizer expects (C,H,W))
+        frames = []
+        for t in range(a.shape[0]):
+            frames.append(self.norm.apply(a[t]))
+        return np.stack(frames, axis=0)  # (T', C_sel, H, W)
 
     @staticmethod
-    def _stack_time(arr_list: List[np.ndarray]) -> np.ndarray:
+    def _first_last_internals(tchw: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        List of (C,H,W) → (T,C,H,W) by stacking along a new leading time axis.
+        (T, C, H, W) -> (2, C, H, W), (T-2, C, H, W)
         """
-        return np.stack(arr_list, axis=0)
+        if tchw.shape[0] < 2:
+            raise ValueError(f"Need at least 2 time steps, got {tchw.shape}")
+        first = tchw[0]
+        last = tchw[-1]
+        internals = tchw[1:-1] if tchw.shape[0] > 2 else np.empty((0,) + tchw.shape[1:], dtype=tchw.dtype)
+        x = np.stack([first, last], axis=0)
+        y = internals
+        return x, y
 
     # ---------- main sampling ----------
 
@@ -335,27 +362,24 @@ class MEPSWindowDataset(Dataset):
             rec = self.recs[i]
             date = rec["date"]
             window = rec["window"]
-            members = rec["members"]               # List[int]
-            lead_ts = rec["lead_times"]            # List[int]
-            paths_2d: List[List[str]] = rec["member_paths"]  # (M, T)
+            members = rec["members"]                       # List[int]
+            lead_ts = rec["lead_times"]                    # List[int] (filtered)
+            lead_idx = rec["lead_indices"]                 # List[int] (positions in merged)
+            files: List[str] = rec["member_files"]         # List[str], one per member
             start_valid_time = rec["start_valid_time"]
             end_valid_time = rec["end_valid_time"]
 
             # Build x=(M,2,C,H,W), y=(M,T-2,C,H,W)
             x_m: List[np.ndarray] = []
             y_m: List[np.ndarray] = []
-            for m_paths in paths_2d:
-                first = self._load_sel(m_paths[0])
-                last = self._load_sel(m_paths[-1])
-                internals = [self._load_sel(p) for p in m_paths[1:-1]]
-                x_tchw = self._stack_time([first, last])          # (2,C,H,W)
-                y_tchw = self._stack_time(internals)              # (T-2,C,H,W)
+            for f in files:
+                tchw = self._load_merged_sel(f, lead_idx)  # (T',C,H,W)
+                x_tchw, y_tchw = self._first_last_internals(tchw)
                 x_m.append(x_tchw)
                 y_m.append(y_tchw)
 
             x = np.stack(x_m, axis=0)  # (M,2,C,H,W)
             y = np.stack(y_m, axis=0)  # (M,T-2,C,H,W)
-
 
             meta = {
                 "sample_mode": "ensemble",
@@ -383,19 +407,12 @@ class MEPSWindowDataset(Dataset):
         window = rec["window"]
         members = rec["members"]                      # List[int]
         lead_ts = rec["lead_times"]                   # List[int]
-        paths_2d: List[List[str]] = rec["member_paths"]
-        m_paths: List[str] = paths_2d[m_idx]          # (T,)
+        lead_idx = rec["lead_indices"]                # List[int]
+        files: List[str] = rec["member_files"]
+        fpath = files[m_idx]
 
-        first_path, last_path = m_paths[0], m_paths[-1]
-        internal_list = m_paths[1:-1]
-
-        first = self._load_sel(first_path)
-        last = self._load_sel(last_path)
-        internals = [self._load_sel(p) for p in internal_list]
-
-        x_tchw = self._stack_time([first, last])      # (2,C,H,W)
-        y_tchw = self._stack_time(internals)          # (T-2,C,H,W)
- 
+        tchw = self._load_merged_sel(fpath, lead_idx)     # (T',C,H,W)
+        x_tchw, y_tchw = self._first_last_internals(tchw) # -> (2,C,H,W), (T-2,C,H,W)
         x, y = x_tchw, y_tchw
 
         meta = {
@@ -416,337 +433,3 @@ class MEPSWindowDataset(Dataset):
             torch.as_tensor(y, dtype=self.out_dtype),
             meta,
         )
-
-
-# ============================================================
-# Lightning DataModule
-# ============================================================
-
-@dataclass
-class SplitConfig:
-    """
-    Split strategy for a single CSV source.
-
-    Built-in types:
-      - "ratio": classic fraction by count
-      - "count": classic by absolute counts
-      - "none":  no split (everything -> train)
-      - "chrono_cycle": date-aware:
-            * sort unique days ascending from records' 'date'
-            * last (1 - train_val_fraction) portion of days -> test
-            * first train_val_fraction portion -> cycle of (train_days, gap_days, val_days)
-    """
-    type: Literal["ratio", "count", "none", "chrono_cycle"] = "ratio"
-
-    # legacy fields (used by ratio / count)
-    train: float = 0.8
-    val: float = 0.1
-    test: float = 0.1
-    seed: int = 42
-    shuffle_before_split: bool = True
-
-    # chrono_cycle params
-    train_val_fraction: float = 0.9   # first 90% of days go to train/val; last 10% -> test
-    train_days: int = 25
-    gap_days: int = 2                 # ignored
-    val_days: int = 5
-
-
-class MEPSNPYDataModule(L.LightningDataModule):
-    """
-    DataModule for MEPS-like ensembles stored as .npy stacks with a grouped CSV.
-
-    Each .npy file is (C_file, H, W). You select `file_channel_indices` (C of them).
-    For each member inside a (date, window):
-      - x := endpoints (first & last lead)
-      - y := internals (all leads between first and last)
-    """
-
-    def __init__(
-        self,
-        # Sources
-        root: str = ".",
-        sequences_csv: Optional[str] = None,   # single CSV; will be split by `split`
-        train_csv: Optional[str] = None,       # OR provide explicit CSVs (no split)
-        val_csv: Optional[str] = None,
-        test_csv: Optional[str] = None,
-
-        # Filtering / inclusion
-        members: Optional[Sequence[int]] = None,
-        leads: Optional[Sequence[int]] = None,
-        require_internal_targets: bool = True,
-        require_all_selected_members: bool = True,
-
-        # Dataset behavior
-        sample_mode: Literal["ensemble", "per_member"] = "ensemble",
-        file_channel_indices: Sequence[int] = (0, 1, 2, 3),
- 
-        # Normalization
-        normalize: Literal["none", "zscore", "symrange"] = "none",
-        stats_npz: Optional[str] = None,
-        mean_key: str = "mean",
-        std_key: str = "std",
-        average_key: str = "average",
-        global_min_key: str = "global_min",
-        global_max_key: str = "global_max",
-        norm_const: float = 1.0,
-
-        # Loader
-        batch_size: int = 32,
-        num_workers: int = 4,
-        pin_memory: bool = True,
-        persistent_workers: Optional[bool] = None,
-        shuffle_train: bool = True,
-        dtype: Literal["float32", "float16", "bfloat16", "float64"] = "float32",
-        mmap: bool = True,
-
-        # Split (only when sequences_csv is provided)
-        split: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        super().__init__()
-        # Sources
-        self.root = root
-        self.sequences_csv = sequences_csv
-        self.train_csv = train_csv
-        self.val_csv = val_csv
-        self.test_csv = test_csv
-
-        # Filters
-        self.members = None if members is None else list(members)
-        self.leads = None if leads is None else list(leads)
-        self.require_internal_targets = bool(require_internal_targets)
-        self.require_all_selected_members = bool(require_all_selected_members)
-
-        # Dataset behavior
-        self.sample_mode = sample_mode
-        self.file_channel_indices = list(file_channel_indices)
- 
-        # Normalization
-        self.normalize = normalize
-        self.stats_npz = stats_npz
-        self.mean_key = mean_key
-        self.std_key = std_key
-        self.average_key = average_key
-        self.global_min_key = global_min_key
-        self.global_max_key = global_max_key
-        self.norm_const = norm_const
-
-        # Loader
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.pin_memory = pin_memory
-        self.persistent_workers = persistent_workers if persistent_workers is not None else (num_workers > 0)
-        self.shuffle_train = shuffle_train
-        self.dtype = dtype
-        self.mmap = mmap
-
-        # Split
-        self.split_cfg = SplitConfig(**split) if split is not None else SplitConfig()
-
-        # Datasets
-        self.train_set: Optional[Dataset] = None
-        self.val_set: Optional[Dataset] = None
-        self.test_set: Optional[Dataset] = None
-
-    # ---------- Lightning hooks ----------
-
-    def prepare_data(self) -> None:
-        # No downloads or preprocessing here; CSV and npy files are assumed to exist.
-        pass
-
-    def _read(self, csv_path: str) -> List[Dict[str, Any]]:
-        return read_grouped_ensemble_windows(
-            csv_path=csv_path,
-            root=self.root,
-            members_filter=self.members,
-            leads_filter=self.leads,
-            require_internal_targets=self.require_internal_targets,
-            require_all_selected_members=self.require_all_selected_members,
-        )
-
-    def _split(self, records: List[Dict[str, Any]]):
-        """
-        Split `records` according to `self.split_cfg`.
-
-        For type = "chrono_cycle":
-          - parse each record['date'] to a pandas Timestamp (date only)
-          - sort unique days ascending
-          - take first floor(train_val_fraction * n_days) days -> train/val by cyclic window
-          - remaining days -> test
-          - within the 90% part, use repeating cycle:
-              train_days -> "train"
-              gap_days   -> ignored
-              val_days   -> "val"
-          - rows with missing/unparsable dates are ignored (not included in any split)
-        """
-        cfg = self.split_cfg
-
-        # ----- chronology-driven split -----
-        if cfg.type == "chrono_cycle":
-            # map each record to a normalized date (YYYY-MM-DD). drop NaT.
-            rec_dates: List[Optional[pd.Timestamp]] = []
-            for r in records:
-                d = r.get("date", None)
-                ts = pd.to_datetime(d, errors="coerce") if d is not None else pd.NaT
-                if pd.notna(ts):
-                    ts = pd.Timestamp(year=ts.year, month=ts.month, day=ts.day)
-                else:
-                    ts = pd.NaT
-                rec_dates.append(ts)
-
-            # index of records that have a valid date
-            valid_idx = [i for i, ts in enumerate(rec_dates) if pd.notna(ts)]
-            if not valid_idx:
-                # fallback: nothing has a date -> put all in train
-                return records, [], []
-
-            # build sorted unique list of days
-            all_days = sorted({rec_dates[i] for i in valid_idx})
-            n_days = len(all_days)
-            if n_days == 0:
-                return records, [], []
-
-            # compute cutoff for test (last (1 - train_val_fraction) days)
-            frac = max(0.0, min(1.0, float(cfg.train_val_fraction)))
-            cutoff = int(frac * n_days)  # days [0 : cutoff) -> train/val; [cutoff : end) -> test
-            cutoff = max(0, min(cutoff, n_days))
-
-            days_trainval = all_days[:cutoff]
-            days_test = all_days[cutoff:]
-
-            # cycle pattern over the train/val days
-            T, G, V = int(cfg.train_days), int(cfg.gap_days), int(cfg.val_days)
-            cycle_len = max(1, T + G + V)
-
-            # assign each day in the train/val segment to split
-            day_to_split: Dict[pd.Timestamp, str] = {}
-            for idx_day, day in enumerate(days_trainval):
-                pos = idx_day % cycle_len
-                if pos < T:
-                    day_to_split[day] = "train"
-                elif pos < T + G:
-                    day_to_split[day] = "gap"  # ignored
-                else:
-                    day_to_split[day] = "val"
-
-            # collect records according to their day assignment
-            rec_train: List[Dict[str, Any]] = []
-            rec_val: List[Dict[str, Any]] = []
-            rec_test: List[Dict[str, Any]] = []
-            test_days_set = set(days_test)
-
-            for i in valid_idx:
-                day = rec_dates[i]
-                if day in test_days_set:
-                    rec_test.append(records[i])
-                else:
-                    tag = day_to_split.get(day, "gap")
-                    if tag == "train":
-                        rec_train.append(records[i])
-                    elif tag == "val":
-                        rec_val.append(records[i])
-                    # else gap -> ignore
-
-            return rec_train, rec_val, rec_test
-
-        # ----- existing legacy behavior (unchanged) -----
-        n = len(records)
-        idx = list(range(n))
-
-        if cfg.shuffle_before_split:
-            g = torch.Generator().manual_seed(cfg.seed)
-            idx = torch.randperm(n, generator=g).tolist()
-
-        if cfg.type == "none":
-            return records, [], []
-
-        if cfg.type == "ratio":
-            t = max(0.0, min(1.0, float(cfg.train)))
-            v = max(0.0, min(1.0, float(cfg.val)))
-            n_train = int(round(t * n))
-            n_val = int(round(v * n))
-            n_train = min(n_train, n)
-            n_val = min(n_val, n - n_train)
-            n_test = n - n_train - n_val
-        elif cfg.type == "count":
-            n_train, n_val, n_test = int(cfg.train), int(cfg.val), int(cfg.test)
-            if n_train + n_val + n_test > n:
-                raise ValueError(f"Split counts exceed dataset size ({n}).")
-        else:
-            raise ValueError(f"Unknown split.type='{cfg.type}'")
-
-        def take(ids: List[int]) -> List[Dict[str, Any]]:
-            return [records[i] for i in ids]
-
-        i_tr = idx[:n_train]
-        i_va = idx[n_train:n_train + n_val]
-        i_te = idx[n_train + n_val:n_train + n_val + n_test]
-        return take(i_tr), take(i_va), take(i_te)
-
-    def setup(self, stage: Optional[str] = None) -> None:
-        """
-        Instantiate train/val/test datasets either from a single CSV (then split)
-        or from explicit CSVs per split (no additional splitting).
-        """
-        if self.train_csv or self.val_csv or self.test_csv:
-            rec_train = self._read(self.train_csv) if self.train_csv else []
-            rec_val = self._read(self.val_csv) if self.val_csv else []
-            rec_test = self._read(self.test_csv) if self.test_csv else []
-        else:
-            if not self.sequences_csv:
-                raise ValueError("Provide `sequences_csv` or explicit `train_csv`/`val_csv`/`test_csv`.")
-            all_rec = self._read(self.sequences_csv)
-            rec_train, rec_val, rec_test = self._split(all_rec)
-
-        def mk(recs: List[Dict[str, Any]]) -> Optional[MEPSWindowDataset]:
-            if not recs:
-                return None
-            return MEPSWindowDataset(
-                records=recs,
-                file_channel_indices=self.file_channel_indices,
-                sample_mode=self.sample_mode,
-                dtype=self.dtype,
-                mmap=self.mmap,
-                normalize=self.normalize,
-                stats_npz=self.stats_npz,
-                mean_key=self.mean_key,
-                std_key=self.std_key,
-                average_key=self.average_key,
-                global_min_key=self.global_min_key,
-                global_max_key=self.global_max_key,
-                norm_const=self.norm_const,
-            )
-
-        self.train_set = mk(rec_train)
-        self.val_set = mk(rec_val)
-        self.test_set = mk(rec_test)
-        
-        train_size = len(self.train_set) if self.train_set else 0
-        val_size = len(self.val_set) if self.val_set else 0
-        test_size = len(self.test_set) if self.test_set else 0
-        rank_zero_info(f"Dataset sizes - Train: {train_size}, Val: {val_size}, Test: {test_size}")
-         
-
-    # ---------- DataLoaders ----------
-
-    def _loader(self, ds: Optional[Dataset], shuffle: bool) -> DataLoader:
-        if ds is None:
-            # Return a no-op loader; caller should handle empty sets gracefully.
-            return DataLoader([], batch_size=self.batch_size)
-        return DataLoader(
-            ds,
-            batch_size=self.batch_size,
-            shuffle=shuffle,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            persistent_workers=self.persistent_workers,
-        )
-
-    def train_dataloader(self) -> DataLoader:
-        return self._loader(self.train_set, shuffle=self.shuffle_train)
-
-    def val_dataloader(self) -> DataLoader:
-        return self._loader(self.val_set, shuffle=False)
-
-    def test_dataloader(self) -> DataLoader:
-        return self._loader(self.test_set, shuffle=False)

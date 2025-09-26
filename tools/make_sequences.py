@@ -1,30 +1,4 @@
 #!/usr/bin/env python3
-"""
-Cycle-first sequence discovery:
-- Take unique forecast base times (from column 'Date').
-- Filter to [--start-date, --end-date].
-- For each cycle and each window (e.g. 0-6, 6-12, 12-18), verify that *all selected members*
-  have all required lead times and that files exist (unless --no-verify-fs).
-- Emit one row per (Date, Window) with aligned paths across members.
-
-Example:
-  python find_sequences_all_members.py \
-      --labels labels.csv --root /data \
-      --windows 0-6,6-12,12-18 \
-      --members 0,1,2 \
-      --start-date 2023-01-01T00:00:00Z \
-      --end-date 2023-03-01T00:00:00Z \
-      --out sequences_grouped.csv
-
-Sample input labels.csv:
-Name,Importance,PosX,PosY,Date,LeadTime,Member
-2023/01/01/00/2023010100_lt00_mem000.npy,1,256,256,2023-01-01T00:00:00Z,0,0
-2023/01/01/00/2023010100_lt00_mem001.npy,1,256,256,2023-01-01T00:00:00Z,0,1
-2023/01/01/00/2023010100_lt00_mem002.npy,1,256,256,2023-01-01T00:00:00Z,0,2
-2023/01/01/00/2023010100_lt00_mem003.npy,1,256,256,2023-01-01T00:00:00Z,0,3
-
-"""
-
 from __future__ import annotations
 import argparse
 import json
@@ -32,10 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Iterable, Any, Tuple
 
-import pandas as pd
-
 import os
 os.environ["TZ"] = "UTC"
+
+import numpy as np
+import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -153,20 +128,17 @@ def find_sequences_all_members(
     dates_sorted: List[pd.Timestamp],
 ) -> pd.DataFrame:
     """
-    Iterate cycles (dates_sorted). For each window, require that every member in selected_members
-    has all required leads. If yes, emit one record per (Date, Window) with aligned paths.
+    For each (Date, Window), require every member to have all required leads.
+    Emit one row with aligned lists of member->leadtime paths.
     """
     records: List[Dict[str, Any]] = []
-
     for date in dates_sorted:
         member_map = cycle_index.get(date, {})
-        # Require that ALL selected members exist in this cycle
         if not all(m in member_map for m in selected_members):
             continue
- 
+
         for w in windows:
             req = w.required_leads()
-         
             ok = True
             per_member_paths: List[List[str]] = []
             for m in selected_members:
@@ -194,12 +166,130 @@ def find_sequences_all_members(
                     "EndValidTime": end_valid,
                 }
             )
-
     out = pd.DataFrame.from_records(records)
     if not out.empty:
         out.sort_values(["Date", "Window"], inplace=True)
         out.reset_index(drop=True, inplace=True)
     return out
+
+
+# ---------------------- NEW: materialization helpers ----------------------
+def _cycle_str(dt: pd.Timestamp) -> str:
+    # YYYYMMDDHH based on UTC
+    dt = pd.to_datetime(dt, utc=True)
+    return dt.strftime("%Y%m%d%H")
+
+
+def _merge_target_path(merge_root: Path, dt: pd.Timestamp, window: str, member: int) -> Path:
+    # organize per cycle under merge_root/YYYY/MM/DD/HH/
+    yyyy = dt.strftime("%Y")
+    mm = dt.strftime("%m")
+    dd = dt.strftime("%d")
+    hh = dt.strftime("%H")
+    base = f"{_cycle_str(dt)}_w{window}_mem{member:03d}.npy"
+    return merge_root / yyyy / mm / dd / hh / base
+
+
+def _atomic_save_npy(path: Path, arr: np.ndarray) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    np.save(path, arr)
+
+def _format_window_2d(win: str) -> str:
+    """Convert 'a-b' to two-digit 'aa-bb' (e.g., '0-6' -> '00-06')."""
+    a, b = (s.strip() for s in win.split("-", 1))
+    return f"{int(a):02d}-{int(b):02d}"
+
+def merge_member_leads_for_row(
+    row: pd.Series,
+    merge_root: Path,
+    merge_axis: int = 0,
+    overwrite: bool = False,
+) -> List[str]:
+    """
+    For one (Date, Window) row, load each member's per-lead files, stack along `merge_axis`,
+    validate shapes, and write one .npy per member. Return list of merged file paths
+    aligned with `row["Members"]`.
+    """
+    members: List[int] = row["Members"]
+    member_paths: List[List[str]] = row["MemberPaths"]
+    leadtimes: List[int] = row["LeadTimes"]
+    date_ts: pd.Timestamp = row["Date"]
+    window_lbl: str = _format_window_2d(row["Window"])
+
+    merged_paths: List[str] = []
+    for m, files in zip(members, member_paths):
+        target = _merge_target_path(merge_root, date_ts, window_lbl, m)
+        if target.exists() and not overwrite:
+            merged_paths.append(str(target))
+            continue
+
+        # Load all lead arrays
+        arrays: List[np.ndarray] = []
+        ref_shape: Optional[Tuple[int, ...]] = None
+        ref_dtype: Optional[np.dtype] = None
+        for fp in files:
+            a = np.load(fp, mmap_mode=None)
+            if ref_shape is None:
+                ref_shape = a.shape
+                ref_dtype = a.dtype
+            else:
+                if a.shape != ref_shape:
+                    raise ValueError(
+                        f"Shape mismatch while merging Date={date_ts} Window={window_lbl} Member={m} "
+                        f"LeadTimes={leadtimes}: expected {ref_shape}, got {a.shape} for {fp}"
+                    )
+                if a.dtype != ref_dtype:
+                    # allow safe upcast
+                    ref_dtype = np.result_type(ref_dtype, a.dtype)
+            arrays.append(a.astype(ref_dtype, copy=False))
+
+        # Stack along merge_axis (time dimension)
+        merged = np.stack(arrays, axis=merge_axis)
+        _atomic_save_npy(target, merged)
+        merged_paths.append(str(target))
+
+    return merged_paths
+
+
+def materialize_merged_files(
+    seq_df: pd.DataFrame,
+    merge_root: Optional[Path],
+    merge_axis: int,
+    overwrite: bool,
+) -> pd.DataFrame:
+    """
+    If merge_root is provided, create merged files and return a copy of seq_df
+    with 'MemberMerged' instead of 'MemberPaths', and with counts updated.
+    If merge_root is None, returns seq_df unchanged.
+    """
+    if merge_root is None:
+        return seq_df
+
+    if seq_df.empty:
+        return seq_df
+
+    out_rows: List[Dict[str, Any]] = []
+    for _, row in seq_df.iterrows():
+        merged = merge_member_leads_for_row(
+            row=row,
+            merge_root=merge_root,
+            merge_axis=merge_axis,
+            overwrite=overwrite,
+        )
+        new_row = row.to_dict()
+        new_row["MemberMerged"] = merged  # list[str], one per member
+        new_row["NFilesPerMember"] = 1
+        new_row["TotalFiles"] = new_row["NMembers"]  # 1 per member
+        # Keep old MemberPaths as reference if you like, or drop it:
+        del new_row["MemberPaths"]
+        out_rows.append(new_row)
+
+    out_df = pd.DataFrame(out_rows)
+    out_df.sort_values(["Date", "Window"], inplace=True)
+    out_df.reset_index(drop=True, inplace=True)
+    return out_df
+# -------------------------------------------------------------------------
 
 
 def main() -> None:
@@ -213,7 +303,16 @@ def main() -> None:
     ap.add_argument("--end-date", type=str, default=None, help="ISO-8601 upper bound (UTC)")
     ap.add_argument("--out", type=Path, default=None, help="Optional CSV output path")
     ap.add_argument("--extra-out", type=Path, default=None,
-                help="Optional path to write a flat file list CSV (column: file-list)")
+                    help="Optional path to write a flat file list CSV (column: file-list)")
+
+    # NEW: merging options
+    ap.add_argument("--merge-root", type=Path, default=None,
+                    help="If set, write one merged .npy per member (per Date×Window) under this root.")
+    ap.add_argument("--merge-axis", type=int, default=0,
+                    help="Axis to stack lead times on in the merged array (default: 0, i.e., time-first).")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="Overwrite existing merged .npy files if they already exist.")
+
     args = ap.parse_args()
 
     windows = Window.parse_many(args.windows)
@@ -235,10 +334,8 @@ def main() -> None:
         date_max=date_max,
     )
 
-    # If members not specified, default to all members present in (filtered) CSV
     selected_members = sorted(df["Member"].unique().tolist()) if members_list is None else sorted(members_list)
 
-    # Build index and iterate cycles in chronological order
     cycle_index = build_cycle_index(df)
     dates_sorted = sorted(cycle_index.keys())
 
@@ -249,51 +346,67 @@ def main() -> None:
         dates_sorted=dates_sorted,
     )
 
+    # --- NEW: materialize merged files if requested ---
+    merged_df = materialize_merged_files(
+        seq_df=seq_df,
+        merge_root=args.merge_root,
+        merge_axis=args.merge_axis,
+        overwrite=args.overwrite,
+    )
+
     # Summary
-    if seq_df.empty:
+    if merged_df.empty:
         print("No complete (Date, Window) sequences found for ALL selected members.")
     else:
-        ndates = seq_df["Date"].nunique()
+        ndates = merged_df["Date"].nunique()
         print(
-            f"Found {len(seq_df)} (Date, Window) sequences across {ndates} cycles "
+            f"Found {len(merged_df)} (Date, Window) sequences across {ndates} cycles "
             f"for {len(selected_members)} members."
         )
+        summary_cols = ["Date", "Window", "NMembers", "NFilesPerMember", "StartValidTime", "EndValidTime"]
         with pd.option_context("display.max_colwidth", 80):
-            print(seq_df.head(10)[["Date", "Window", "NMembers", "NFilesPerMember", "StartValidTime", "EndValidTime"]])
+            print(merged_df.head(10)[summary_cols])
 
-    # CSV (robust to empty); serialize lists to JSON for clarity
+    # CSV out (robust to empty)
     if args.out:
-        if seq_df.empty:
+        if merged_df.empty:
+            # include new schema with MemberMerged instead of MemberPaths
             cols = [
-                "Date", "Window", "LeadTimes", "Members", "MemberPaths",
+                "Date", "Window", "LeadTimes", "Members", "MemberMerged",
                 "NMembers", "NFilesPerMember", "TotalFiles", "StartValidTime", "EndValidTime"
             ]
             pd.DataFrame(columns=cols).to_csv(args.out, index=False)
             print(f"Wrote 0 sequences (header only) to {args.out}")
         else:
-            out_df = seq_df.copy()
+            out_df = merged_df.copy()
             # ISO-8601 for timestamps
             for col in ["Date", "StartValidTime", "EndValidTime"]:
                 out_df[col] = pd.to_datetime(out_df[col], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%SZ")
             # JSON-encode structured columns
             out_df["LeadTimes"] = out_df["LeadTimes"].apply(lambda x: json.dumps(x))
             out_df["Members"] = out_df["Members"].apply(lambda x: json.dumps(x))
-            out_df["MemberPaths"] = out_df["MemberPaths"].apply(lambda x: json.dumps(x))
+            out_df["MemberMerged"] = out_df["MemberMerged"].apply(lambda x: json.dumps(x))
+            # ensure consistent column order
+            out_cols = [
+                "Date", "Window", "LeadTimes", "Members", "MemberMerged",
+                "NMembers", "NFilesPerMember", "TotalFiles", "StartValidTime", "EndValidTime"
+            ]
+            out_df = out_df[out_cols]
             out_df.to_csv(args.out, index=False)
             print(f"Wrote {len(out_df)} sequences to {args.out}")
 
+    # Extra-out (flat list) → now writes the merged file list
     if args.extra_out:
-        if seq_df.empty:
+        if merged_df.empty:
             pd.DataFrame(columns=["file-list"]).to_csv(args.extra_out, index=False)
             print(f"Wrote 0 files (header only) to {args.extra_out}")
         else:
-            # Flatten all MemberPaths
             all_files: List[str] = []
-            for paths_per_member in seq_df["MemberPaths"]:
-                for member_paths in paths_per_member:
-                    all_files.extend(member_paths)
-            flat_df = pd.DataFrame({"file-list": all_files})
-            flat_df.to_csv(args.extra_out, index=False)
-            print(f"Wrote {len(flat_df)} files to {args.extra_out}")
+            for merged_per_member in merged_df["MemberMerged"]:
+                all_files.extend(merged_per_member)
+            pd.DataFrame({"file-list": all_files}).to_csv(args.extra_out, index=False)
+            print(f"Wrote {len(all_files)} files to {args.extra_out}")
+
+
 if __name__ == "__main__":
     main()
