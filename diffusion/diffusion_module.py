@@ -6,12 +6,134 @@ import torch.nn.functional as F
 import lightning as L
 from typing import Tuple
 from omegaconf import DictConfig
+from hydra.utils import instantiate
 
 from networks.unet import UNet2D
 from networks.autoencoder import OptionalVAE
-from samplers.heun_edm import heun_sample
-from samplers.ddim import ddim_sample
-from samplers.iddpm import iddpm_sample
+
+### Classes
+
+
+# configs/diffusion_config.py
+from dataclasses import dataclass, field
+from typing import List, Tuple, Literal, Optional
+
+# -----------------------------
+# Latent Autoencoder Config
+# -----------------------------
+@dataclass
+class LatentConfig:
+    """Optional VAE-style encoder/decoder for latent diffusion."""
+    enable: bool = False          # Whether to use latent autoencoding
+    frozen: bool = True           # Freeze encoder/decoder (no training)
+    latent_channels: int = 4      # Channels in latent space
+    in_channels: int = 3          # Input channels (for first conv in encoder)
+    cond_channels: int = 6        # Channels for cond frames (2 * C)
+    target_channels: int = 12     # Channels for target frames ((T-2) * C)
+
+# -----------------------------
+# Model (UNet backbone) Config
+# -----------------------------
+@dataclass
+class ModelConfig:
+    """UNet backbone hyperparameters."""
+    base_ch: int = 128                  # Base number of channels
+    ch_mults: Tuple[int, ...] = (1, 2, 2, 2)  # Multipliers for each UNet level
+    num_res_blocks: int = 2             # Number of ResBlocks per level
+    emb_dim: int = 256                  # Embedding dimension for timestep/σ embedding
+    attn_resolutions: Tuple[int, ...] = (8, 16)  # Resolutions (downsample factors) where attention is used
+    num_heads: int = 4                  # Number of attention heads
+    dropout: float = 0.0                # Dropout rate
+    use_gn: bool = True                 # Use GroupNorm instead of BatchNorm
+
+# -----------------------------
+# SDE / Noise Schedule Config
+# -----------------------------
+@dataclass
+class SDEConfig:
+    """Noise schedule configuration."""
+    name: Literal["edm", "vp", "ve"] = "edm"  # Which family of SDE / noise schedule
+    # VP-specific
+    class VP:
+        T: int = 1000
+        cosine_s: float = 0.008
+    vp: VP = field(default_factory=VP)
+    # EDM-specific
+    class EDM:
+        sigma_min: float = 0.002
+        sigma_max: float = 80.0
+        rho: float = 7.0
+    edm: EDM = field(default_factory=EDM)
+
+# -----------------------------
+# Loss Config
+# -----------------------------
+@dataclass
+class LossConfig:
+    """Loss and preconditioning options."""
+    P_mean: float = -1.2              # Log-σ mean for EDM sampling
+    P_std: float = 1.2                # Log-σ std for EDM sampling
+    sigma_data: float = 0.5           # σ_data constant
+    target: Literal["x", "eps", "v", "score"] = "x"  # Loss target type. "x" clean data
+    weight: Literal["edm", "none"] = "edm"           # Loss weighting scheme
+
+ 
+
+# -----------------------------
+# Sampler Config
+# -----------------------------
+@dataclass
+class SamplerConfig:
+    """Sampler selection + parameters."""
+    name: Literal["heun", "ddim", "iddpm"] = "heun"
+    steps: int = 50                      # Number of denoising steps
+    # Heun/EDM
+    edm: SDEConfig.EDM = field(default_factory=SDEConfig.EDM)
+    # DDIM
+    class DDIM:
+        T: int = 50
+        eta: float = 0.0
+        cosine_s: float = 0.008
+    ddim: DDIM = field(default_factory=DDIM)
+    # iDDPM
+    class IDDPM:
+        T: int = 1000
+        cosine_s: float = 0.008
+    iddpm: IDDPM = field(default_factory=IDDPM)
+
+# -----------------------------
+# Data Config
+# -----------------------------
+@dataclass
+class DataConfig:
+    """Shape/config info for dataset items (used to size model)."""
+    C: int = 3      # Channels per frame
+    T: int = 4      # Number of timesteps in sequence
+
+# -----------------------------
+# Samples (logging/vis) Config
+# -----------------------------
+@dataclass
+class SamplesConfig:
+    """Settings for sample callback during validation."""
+    size: int = 256  # Resolution (H=W=size) for random sample grid
+
+# -----------------------------
+# Full Diffusion Module Config
+# -----------------------------
+@dataclass
+class DiffusionConfig:
+    """Top-level config for DiffusionLightning."""
+    seed: int = 42
+    latent: LatentConfig = field(default_factory=LatentConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    sde: SDEConfig = field(default_factory=SDEConfig)
+    loss: LossConfig = field(default_factory=LossConfig)
+    optimizer_cfg: Optional[dict] = None,
+    scheduler_cfg: Optional[dict] = None,    
+    sampler: SamplerConfig = field(default_factory=SamplerConfig)
+    data: DataConfig = field(default_factory=DataConfig)
+    samples: SamplesConfig = field(default_factory=SamplesConfig)
 
 # ---------- EDM preconditioning ----------
 def edm_precond(sigma: torch.Tensor, sigma_data: float):
@@ -31,7 +153,7 @@ def fourier_embed(x: torch.Tensor, dim=64):
     return emb
 
 # ---------- Lightning Module ----------
-class DiffusionLightning(L.LightningModule):
+class DiffusionModule(L.LightningModule):
     """
     Conditional diffusion (EDM/VP/VE) that:
       - concatenates cond (2*C) channels (clean) with target (K*C) channels (noised),
@@ -43,7 +165,7 @@ class DiffusionLightning(L.LightningModule):
         self.save_hyperparameters(cfg)
         self.cfg = cfg
 
-        self.vae = OptionalVAE(cfg.latent)   # encodes/decodes cond & target if enabled
+        self.vae = OptionalVAE(cfg.latent)
 
         # Channel math
         self.C = cfg.data.C
@@ -54,8 +176,6 @@ class DiffusionLightning(L.LightningModule):
         out_model_ch = self.target_ch
 
         if self.vae.enabled:
-            # In latent mode, we encode cond and target separately then pack;
-            # the per-stream channels change to cfg.latent.latent_channels per frame.
             self.cond_ch   = 2 * self.vae.latent_channels
             self.target_ch = (self.T - 2) * self.vae.latent_channels
             in_model_ch  = self.cond_ch + self.target_ch
@@ -81,7 +201,7 @@ class DiffusionLightning(L.LightningModule):
         sde = self.cfg.sde.name
         if sde in ("edm", "ve"):
             Pm, Ps = self.cfg.loss.P_mean, self.cfg.loss.P_std
-            return torch.exp(torch.randn(B, device=device) * Ps + Pm)  # σ
+            return torch.exp(torch.randn(B, device=device) * Ps + Pm)
         elif sde == "vp":
             T = self.cfg.sde.vp.T
             t = torch.randint(low=1, high=T+1, size=(B,), device=device)
@@ -93,43 +213,40 @@ class DiffusionLightning(L.LightningModule):
         else:
             raise ValueError("sde.name ∈ {edm, vp, ve}")
 
-    # --------- Pack (x,y) into cond/target tensors ---------
+    # --------- Pack (x,y) -> cond/target ---------
     def _pack_xy(self, x, y):
-        # x: (B, 2, C, H, W) or (2, C, H, W) → ensure batch
         if x.dim() == 4:
             x = x.unsqueeze(0)
             y = y.unsqueeze(0)
         B, two, C, H, W = x.shape
         _, K, C2, H2, W2 = y.shape
         assert two == 2 and C2 == C and H2 == H and W2 == W
-        cond = x.reshape(B, 2*C, H, W)          # (B, 2C, H, W)
-        target = y.reshape(B, K*C, H, W)        # (B, (T-2)C, H, W)
+        cond = x.reshape(B, 2*C, H, W)
+        target = y.reshape(B, K*C, H, W)
         return cond, target
 
     # --------- Optional VAE encode/decode ---------
     def _maybe_encode(self, cond, target):
         if not self.vae.enabled: return cond, target
         with torch.no_grad() if self.vae.frozen else torch.enable_grad():
-            cond_z = self.vae.encode_cond(cond)       # (B, 2*Clat, H', W')
-            targ_z = self.vae.encode_target(target)   # (B, K*Clat, H', W')
+            cond_z = self.vae.encode_cond(cond)
+            targ_z = self.vae.encode_target(target)
         return cond_z, targ_z
 
     def _maybe_decode_target(self, target):
         if not self.vae.enabled: return target
         with torch.no_grad():
-            return self.vae.decode_target(target)     # (B, K*C, H, W) in [-1,1]
+            return self.vae.decode_target(target)
 
-    # --------- Denoiser: target-only EDM preconditioning, cond as clean input ---------
+    # --------- Denoiser: target-only preconditioning ---------
     def _denoise_target(self, cond_clean, target_noisy, sigma):
-        # sigma: (B,)
         c_skip, c_out, c_in, c_noise = edm_precond(sigma, self.sigma_data)
         emb = self.embed(fourier_embed(c_noise))
-        # scale only the target part
         target_in = c_in.view(-1,1,1,1) * target_noisy
         net_in = torch.cat([cond_clean, target_in], dim=1)
-        fx = self.raw_net(net_in, emb)  # predicts clean target residual
+        fx = self.raw_net(net_in, emb)
         x_hat = c_skip.view(-1,1,1,1) * target_noisy + c_out.view(-1,1,1,1) * fx
-        return x_hat  # same shape as target channels
+        return x_hat
 
     # --------- Loss ---------
     def _compute_loss(self, cond, target):
@@ -140,7 +257,7 @@ class DiffusionLightning(L.LightningModule):
 
         pred = self._denoise_target(cond, target_noisy, sigma)
 
-        mode = self.cfg.loss.target  # 'x'|'eps'|'v'|'score'
+        mode = self.cfg.loss.target
         if mode == "x":
             tgt = target
         elif mode == "eps":
@@ -171,11 +288,11 @@ class DiffusionLightning(L.LightningModule):
 
     # --------- Lightning hooks ---------
     def training_step(self, batch, _):
-        x, y = batch  # x: (B,2,C,H,W), y: (B,T-2,C,H,W)
+        x, y = batch
         cond, target = self._pack_xy(x, y)
         cond, target = self._maybe_encode(cond, target)
         loss = self._compute_loss(cond, target)
-        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         return loss
 
     def validation_step(self, batch, _):
@@ -183,67 +300,63 @@ class DiffusionLightning(L.LightningModule):
         cond, target = self._pack_xy(x, y)
         cond, target = self._maybe_encode(cond, target)
         loss = self._compute_loss(cond, target)
-        self.log("val/loss", loss, prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log("val_loss", loss, prog_bar=True, on_epoch=True, sync_dist=True)
         return loss
 
     def configure_optimizers(self):
-        opt = torch.optim.AdamW(self.parameters(), lr=self.cfg.optim.lr,
-                                betas=tuple(self.cfg.optim.betas), weight_decay=self.cfg.optim.weight_decay)
+        from hydra.utils import instantiate
+        if isinstance(self.cfg.optimizer_cfg, dict) and "_target_" in self.cfg.optimizer_cfg:
+            opt = instantiate(self.cfg.optimizer_cfg, params=self.parameters())
+        else:
+            raise ValueError("no hydra optimizer target")
+        if self.cfg.scheduler_cfg:
+            try:
+                sch = instantiate(self.cfg.scheduler_cfg, optimizer=opt)
+                return {"optimizer": opt, "lr_scheduler": sch}
+            except Exception:
+                return opt
         return opt
 
-# --------- EMA fallback ---------
-class SimpleEMAFallback(L.Callback):
-    def __init__(self, decay=0.9999):
-        super().__init__()
-        self.decay=decay; self.shadow=None
-    def on_train_start(self, trainer, pl_module):
-        self.shadow = {k: v.detach().clone() for k,v in pl_module.state_dict().items()}
-    def on_after_backward(self, trainer, pl_module):
-        with torch.no_grad():
-            for k,v in pl_module.state_dict().items():
-                self.shadow[k].mul_(self.decay).add_(v.detach(), alpha=1-self.decay)
-    def on_validation_start(self, trainer, pl_module):
-        self._backup = {k: v.detach().clone() for k,v in pl_module.state_dict().items()}
-        pl_module.load_state_dict(self.shadow, strict=False)
-    def on_validation_end(self, trainer, pl_module):
-        pl_module.load_state_dict(self._backup, strict=False)
-
-# --------- Sampling callback (conditioned generation of target frames) ---------
+# --------- Sampling callback: Hydra-instantiated sampler class ---------
 class SamplerCallback(L.Callback):
     def __init__(self, every_n_epochs=1, n=4, sampler_cfg=None, out_key="samples"):
         super().__init__()
-        self.every = every_n_epochs; self.n = n; self.sampler_cfg = sampler_cfg; self.key = out_key
+        self.every = every_n_epochs
+        self.n = n
+        self.sampler_cfg = sampler_cfg
+        self.key = out_key
+        self._sampler = None  # created lazily via Hydra
+
+    def on_fit_start(self, trainer, pl_module):
+        # Instantiate sampler class once, using cfg.sampler (must have _target_)
+        if self.sampler_cfg is not None and "_target_" in self.sampler_cfg:
+            self._sampler = instantiate(self.sampler_cfg)
+        else:
+            self._sampler = None
 
     @torch.no_grad()
     def on_validation_epoch_end(self, trainer, pl_module):
-        if (pl_module.current_epoch+1) % self.every != 0: return
+        if (pl_module.current_epoch + 1) % self.every != 0:
+            return
+        if self._sampler is None:
+            return
+
         B = self.n
         C = pl_module.C if not pl_module.vae.enabled else pl_module.vae.latent_channels
         H = W = pl_module.cfg.samples.size
-        # Build random conditioning (demo); in your use, take real x
-        cond = torch.randn(B, 2*C, H, W, device=pl_module.device) * 0.0  # zeros demo
-        name = pl_module.cfg.sampler.name
-        if name == "heun":
-            targ = heun_sample(pl_module, cond, (B, pl_module.target_ch if not pl_module.vae.enabled else (pl_module.T-2)*C, H, W),
-                               pl_module.device, pl_module.cfg.sampler)
-        elif name == "ddim":
-            targ = ddim_sample(pl_module, cond, (B, pl_module.target_ch if not pl_module.vae.enabled else (pl_module.T-2)*C, H, W),
-                               pl_module.device, pl_module.cfg.sampler)
-        elif name == "iddpm":
-            targ = iddpm_sample(pl_module, cond, (B, pl_module.target_ch if not pl_module.vae.enabled else (pl_module.T-2)*C, H, W),
-                                pl_module.device, pl_module.cfg.sampler)
-        else:
-            return
+
+        # Build dummy zero cond just for visual sanity; users should pass real cond for eval
+        cond = torch.zeros(B, 2*C, H, W, device=pl_module.device)
+
+        target_ch = pl_module.target_ch if not pl_module.vae.enabled else (pl_module.T - 2) * C
+        targ = self._sampler.sample(pl_module, cond, (B, target_ch, H, W), pl_module.device)
 
         if pl_module.vae.enabled:
             targ = pl_module._maybe_decode_target(targ)
 
-        # For visualization, split first internal frame only (optional)
         try:
             import torchvision.utils as vutils
-            # If K>1, visualize first C channels:
-            K = (pl_module.T - 2)
-            show = targ[:, :C, :, :].clamp(-1,1)
+            show = targ[:, :C, :, :].clamp(-1, 1)
             grid = vutils.make_grid(show, nrow=int(self.n**0.5), normalize=True, value_range=(-1,1))
             if hasattr(trainer.logger, "experiment") and hasattr(trainer.logger.experiment, "add_image"):
                 trainer.logger.experiment.add_image(self.key, grid, global_step=trainer.global_step)

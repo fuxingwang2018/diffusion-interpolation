@@ -1,4 +1,9 @@
- 
+- _target_: diffusion.diffusion_module.SamplerCallback
+  every_n_epochs: 1
+  n: 9
+  sampler_cfg: ${sampler} 
+
+
 - _target_: utils.GPUsAssignedCallback
 - _target_: utils.GPUMemoryMonitorCallback
   every_n_steps: 50

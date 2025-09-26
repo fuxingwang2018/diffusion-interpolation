@@ -19,5 +19,22 @@ logger:
   run_name: "ddpm-npy-1-year_${now:%Y%m%d_%H%M%S}"
 # Hydra 1.3+ config
 seed: 42
+sampler:
+    _target_: samplers.heun_edm.HeunEDMSampler
+    steps: 40
+    sigma_min: 0.002
+    sigma_max: 80.0
+    rho: 7.0
+    out_key: samples
+    
+# Alternative:
+# sampler:
+#   _target_: samplers.ddim.DDIMSampler
+#   T: 50
+#   eta: 0.0
+#   cosine_s: 0.008
 
-
+# sampler:
+#   _target_: samplers.iddpm.IDDPMSampler
+#   T: 1000
+#   cosine_s: 0.008

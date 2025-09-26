@@ -1,46 +1,47 @@
-_target_: models.DDPMInterpolator
+_target_: diffusion.diffusion_module.DiffusionModule
+cfg:
+  _target_: diffusion.diffusion_module.DiffusionConfig
 
 
+  # channels
+  cond_channels: 6
+  target_channels: 15
 
-# channels
-cond_channels: 6
-target_channels: 15
+  # --- NEW: attention in UNet ---
+  use_attention: false
+  attn_heads: 4
+  attn_dim_head: 16
+  attn_levels: ["mid", "down2"]   # good default: bottleneck + next coarsest level
 
-# --- NEW: attention in UNet ---
-use_attention: false
-attn_heads: 4
-attn_dim_head: 16
-attn_levels: ["mid", "down2"]   # good default: bottleneck + next coarsest level
+  # UNet backbone
+  unet_base: 64
+  time_embed_dim: 256
+  force_float32: True
+  init_with_ones: false  # for testing
 
-# UNet backbone
-unet_base: 64
-time_embed_dim: 256
-force_float32: True
-init_with_ones: false  # for testing
-
-# DDPM core
-T: 1000
-schedule: cosine
-cosine_s: 0.02           # <— safer tail than 0.008
-predict: v                
-loss_weighting: snr
-snr_gamma: 2.0
+  # DDPM core
+  T: 1000
+  schedule: cosine
+  cosine_s: 0.02           # <— safer tail than 0.008
+  predict: v                
+  loss_weighting: snr
+  snr_gamma: 2.0
 
 
-# validation sampling & saving
-sample_every_val: 1
-sample_save_npz: true
+  # validation sampling & saving
+  sample_every_val: 1
+  sample_save_npz: true
 
-optimizer_cfg:
-  _target_: torch.optim.AdamW
-  lr: 0.5e-4
-  weight_decay: 1.0e-4
+  optimizer_cfg:
+    _target_: torch.optim.AdamW
+    lr: 0.5e-4
+    weight_decay: 1.0e-4
 
-scheduler_cfg:
-  _target_: torch.optim.lr_scheduler.ExponentialLR
-  gamma: 0.9999
+  scheduler_cfg:
+    _target_: torch.optim.lr_scheduler.ExponentialLR
+    gamma: 0.9999
 
-figures_cfg:
-  root: ${_work_dir}/figures
-  use_meta_subdirs: true
-  filename_template: "{date}_{window}_m{member}"
+  figures_cfg:
+    root: ${_work_dir}/figures
+    use_meta_subdirs: true
+    filename_template: "{date}_{window}_m{member}"
