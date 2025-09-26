@@ -1,4 +1,4 @@
-from .meps_npy_datamodule import MEPSNPYDataModule
+from .meps_npy_datamodule import MEPSWindowDataset
 
-__all__ = [ "MEPSNPYDataModule" ] 
+__all__ = [ "MEPSWindowDataset" ] 
 

@@ -9,7 +9,7 @@ ckpt_path: ${_checkpoints_dir}/last.ckpt # if resume_from_ckpt=file
 
 defaults:
   - trainer: ddp
-  - datamodule: meps_npy3
+  - datamodule: meps_npy
   - model: ddpm_attention
   - callbacks: default
   - logger: default

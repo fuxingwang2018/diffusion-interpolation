@@ -1,20 +1,20 @@
 
 
-_target_: data.MEPSNPYDataModule
+_target_: data.MEPSWindowDataset
 # Data
 root: ${_data_dir}/samples                              # link for tier1 data for high performance
-sequences_csv: ${_data_dir}/sequences-test.csv            # grouped CSV with JSON columns
+sequences_csv: ${_data_dir}/sequences-test4.csv            # grouped CSV with JSON columns
 # Which members / leads to include (null = all present in CSV)
 members: null                                      # e.g. [0,1,2]
 leads: null                                        # e.g. [0,1,2,3,4,5,6]
 require_internal_targets: true                     # need at least one internal lead
 require_all_selected_members: true                 # skip windows missing any requested member
 # Sample building
-sample_mode: ensemble                              # ensemble | per_member
+sample_mode: per_member                              # ensemble | per_member
 file_channel_indices: [0, 1, 2]                    # pick C channels from each (4,H,W)
 # Normalization
 normalize: symrange                                    # none | zscore | symrange
-stats_npz: ${_data_dir}/sequences-stats-test.npz
+stats_npz: ${_data_dir}/sequences-stats-test4.npz
 mean_key: mean
 std_key: std
 average_key: global_mean                        # if using symrange
