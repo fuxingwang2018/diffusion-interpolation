@@ -2,7 +2,7 @@
 
 _target_: data.MEPSWindowDataset
 # Data
-root: ${_data_dir}/samples                              # link for tier1 data for high performance
+root: ${_data_dir}/samples_merged                              # link for tier1 data for high performance
 sequences_csv: ${_data_dir}/sequences-test4.csv            # grouped CSV with JSON columns
 # Which members / leads to include (null = all present in CSV)
 members: null                                      # e.g. [0,1,2]
