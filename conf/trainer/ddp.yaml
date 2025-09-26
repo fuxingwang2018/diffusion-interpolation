@@ -2,7 +2,7 @@
 accelerator: gpu
 devices: 4 #  4 for ddp_spawn and 1 for ddp
 strategy: ddp # single_device #ddp
-precision: 32-true #bf16-mixed
+precision: 32-true #bf16-mixed # TODO: implement mixed precision
 max_epochs: 1000
 log_every_n_steps: 10
 deterministic: false

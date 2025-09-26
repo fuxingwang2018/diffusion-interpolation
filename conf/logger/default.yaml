@@ -1,7 +1,7 @@
 
 _target_: lightning.pytorch.loggers.MLFlowLogger
 experiment_name: "meps-interpolation"
-run_name: "run_${now:%Y%m%d_%H%M%S}"
+run_name: "fast_run_${now:%Y%m%d_%H%M%S}"
 tracking_uri: file:${_mlflow_dir}
 tags:
   project: "diffusion_interpolation"
