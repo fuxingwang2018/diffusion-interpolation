@@ -41,16 +41,16 @@ python tools/calc_stats.py --file-list sequences-for-stats-test3.csv  --root-dir
 
 python make_sequences.py \
   --labels labels.csv \
-  --root /home/users/u101329/p200177_t1_hp/u101329/npy_interp/samples \
-  --windows 0-6,6-12,12-18,18-24,24-30,30-36 \
+  --root /home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep/samples \
+  --windows 0-6,6-12,12-18,18-24,24-30,30-36,36-42 \
   --start-date 2023-01-01T00:00:00Z \
-  --end-date 2024-03-31T00:00:00Z \
+  --end-date 2024-12-31T00:00:00Z \
   --merge-root merged_samples \
-  --out sequences-test4.csv  \
-  --extra-out sequences-for-stats-test4.csv \
+  --out sequences-test5.csv  \
+  --extra-out sequences-for-stats-test5.csv \
   --no-verify-fs
 
-python make_stats.py --file-list sequences-for-stats-test4.csv --root-dir merged_samples --out sequences-stats-test4.npz
+python make_stats.py --file-list sequences-for-stats-test5.csv --root-dir merged_samples --out sequences-stats-test5.npz
 
 ```
 
@@ -113,27 +113,23 @@ sbatch submit_meps_ddp.sh
 module load env/release/2024.1
 module load Apptainer/1.3.6-GCCcore-13.3.0
 module load git
-DATA_DIR=/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep
+DATA_DIR=/home/users/u101329/p200177_t1_hp/u101329/npy_interp/
 ROOT_DIR=/home/users/u101329/p200177_t2/u101329/tests/exp-01
+WORK_DIR=$ROOT_DIR/_work
 MLFLOW_DIR=/home/users/u101329/p200177_t2/u101329/_mlruns_apptainer
 SIF_FILE=../containers/container.sif 
 apptainer exec \
     --nv \
     --containall \
     --bind .:/code \
-    --bind $ROOT_DIR:/root_dir \
-    --bind $DATA_DIR/:/data \
-    --bind $MLFLOW_DIR:/_mlruns \
+    --bind $DATA_DIR:$DATA_DIR \
+    --bind $ROOT_DIR:$ROOT_DIR \
+    --bind $WORK_DIR:$WORK_DIR \
+    --bind $MLFLOW_DIR:$MLFLOW_DIR \
     $SIF_FILE \
     bash -c '
         set -e
         cd /code
-        export DATA_DIR=/data
-        export ROOT_DIR=/root_dir
-        export WORK_DIR=$ROOT_DIR/_work
-        export MLFLOW_DIR=/_mlruns
-        [ -d $WORK_DIR ] || mkdir -p $WORK_DIR
-        [ -d $MLFLOW_DIR ] || mkdir -p $MLFLOW_DIR
         python test_meps_numpy_datamodule.py #train.py 
     '
 ```

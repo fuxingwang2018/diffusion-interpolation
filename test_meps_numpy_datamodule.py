@@ -47,7 +47,7 @@ def main(cfg: DictConfig) -> None:
     print("Train samples:", len(train_set))
     
     # One item (without DataLoader collation)
-    x, y, meta = train_set[15]
+    x, y, meta = train_set[26*15*6+1]
 
     print("Single sample:")
     print("  x:", x.shape, x.dtype)

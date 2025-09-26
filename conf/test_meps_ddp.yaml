@@ -1,4 +1,4 @@
-_data_dir: ${oc.env:DATA_DIR,/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep}
+_data_dir: ${oc.env:DATA_DIR,/home/users/u101329/p200177_t1_hp/u101329/npy_interp/}
 _root_dir: ${oc.env:ROOT_DIR,/home/users/u101329/p200177_t2/u101329/diffusion-interp}
 _mlflow_dir: ${oc.env:MLFLOW_DIR,/home/users/u101329/p200177_t2/u101329/_mlruns}
 _work_dir: ${oc.env:WORK_DIR,${_root_dir}/_work2}
