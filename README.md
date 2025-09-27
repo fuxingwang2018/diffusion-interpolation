@@ -52,6 +52,22 @@ python make_sequences.py \
 
 python make_stats.py --file-list sequences-for-stats-test5.csv --root-dir merged_samples --out sequences-stats-test5.npz
 
+
+python make_sequences.py \
+  --labels labels.csv \
+  --root /home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep/samples \
+  --windows 0-6 \
+  --members 0,1 \
+  --start-date 2023-01-01T00:00:00Z \
+  --end-date 2023-02-28T00:00:00Z \
+  --merge-root merged_samples \
+  --out sequences-reduced-test.csv  \
+  --extra-out sequences-for-stats-reduced-test.csv \
+  --no-verify-fs
+
+python make_stats.py --file-list sequences-for-stats-reduced-test.csv --root-dir . --out sequences-stats-reduced-test.npz
+
+
 ```
 
 ### Files used for test
@@ -113,8 +129,16 @@ sbatch submit_meps_ddp.sh
 module load env/release/2024.1
 module load Apptainer/1.3.6-GCCcore-13.3.0
 module load git
+
+_data_dir: ${oc.env:DATA_DIR,/home/users/u101329/p200177_t1_hp/u101329/npy_interp/}
+_root_dir: ${oc.env:ROOT_DIR,/home/users/u101329/p200177_t2/u101329/diffusion-interp}
+_mlflow_dir: ${oc.env:MLFLOW_DIR,/home/users/u101329/p200177_t2/u101329/_mlruns}
+_work_dir: ${oc.env:WORK_DIR,${_root_dir}/_work}
+_checkpoints_dir: ${_work_dir}/checkpoints
+
+
 DATA_DIR=/home/users/u101329/p200177_t1_hp/u101329/npy_interp/
-ROOT_DIR=/home/users/u101329/p200177_t2/u101329/tests/exp-01
+ROOT_DIR=/home/users/u101329/p200177_t2/u101329/diffusion-interp
 WORK_DIR=$ROOT_DIR/_work
 MLFLOW_DIR=/home/users/u101329/p200177_t2/u101329/_mlruns_apptainer
 SIF_FILE=../containers/container.sif 
@@ -130,6 +154,10 @@ apptainer exec \
     bash -c '
         set -e
         cd /code
+        export DATA_DIR=$DATA_DIR
+        export ROOT_DIR=$ROOT_DIR
+        export WORK_DIR=$WORK_DIR
+        export MLFLOW_DIR=$MLFLOW_DIR
         python test_meps_numpy_datamodule.py #train.py 
     '
 ```

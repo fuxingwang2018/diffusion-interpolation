@@ -1,0 +1,4 @@
+_target_: samplers.DDIMSampler
+T: 50
+eta: 0.0
+cosine_s: 0.008

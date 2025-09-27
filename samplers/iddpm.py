@@ -1,5 +1,6 @@
 # samplers/iddpm.py
 import torch, math
+from .base import SamplerBase
 
 def _betas_for_cosine(T, s=0.008, device="cpu"):
     t = torch.arange(0, T+1, device=device)
@@ -8,13 +9,16 @@ def _betas_for_cosine(T, s=0.008, device="cpu"):
     betas = (1 - (ab[1:] / ab[:-1])).clamp(1e-8, 0.999)
     return betas
 
-class IDDPMSampler:
+class IDDPMSampler(SamplerBase):
     def __init__(self, T: int = 1000, cosine_s: float = 0.008):
-        self.T = T
-        self.cosine_s = cosine_s
+        self.T, self.cosine_s = int(T), float(cosine_s)
+
+    @property
+    def name(self) -> str:
+        return "iddpm"
 
     @torch.no_grad()
-    def sample(self, module, cond, target_shape, device):
+    def sample(self, module, cond, target_shape, device, **kwargs):
         B, C_t, H, W = target_shape
         betas = _betas_for_cosine(self.T, s=self.cosine_s, device=device)
         alphas = 1.0 - betas
@@ -27,8 +31,7 @@ class IDDPMSampler:
             x0_hat = module._denoise_target(cond, x, sigma)
             eps_hat = (x - alpha_bar_t.sqrt()*x0_hat) / (1 - alpha_bar_t).sqrt()
             if t > 0:
-                beta_t = betas[t]
-                alpha_t = alphas[t]
+                beta_t = betas[t]; alpha_t = alphas[t]
                 var = beta_t * (1 - ab[t-1]) / (1 - ab[t])
                 mean = (1/alpha_t.sqrt())*(x - beta_t/((1 - alpha_bar_t).sqrt())*eps_hat)
                 x = mean + var.sqrt() * torch.randn_like(x)

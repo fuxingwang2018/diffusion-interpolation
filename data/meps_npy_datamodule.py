@@ -34,6 +34,7 @@ def read_grouped_ensemble_windows_merged(
     leads_filter: Optional[Iterable[int]] = None,
     require_internal_targets: bool = True,
     require_all_selected_members: bool = True,
+    max_days_count: int = -1,
 ) -> List[Dict[str, Any]]:
     """
     Read a grouped sequences CSV where each member has ONE merged file with shape (T,C,H,W).
@@ -46,6 +47,8 @@ def read_grouped_ensemble_windows_merged(
     Optional passthrough columns: Date, Window, StartValidTime, EndValidTime.
     """
     df = pd.read_csv(csv_path)
+    if max_days_count > 0:
+        df = df.head(max_days_count)
     out: List[Dict[str, Any]] = []
 
     for _, row in df.iterrows():
@@ -276,8 +279,8 @@ class MEPSWindowDataset(Dataset):
         num_workers: Optional[int] = None,
         pin_memory: Optional[bool] = None,
         shuffle_train: Optional[bool] = None,
+        max_days_count: int = -1,
         split: Optional[Dict[str, Any]] = None,
-        **_
     ) -> None:
         super().__init__()
 
@@ -292,6 +295,7 @@ class MEPSWindowDataset(Dataset):
                 leads_filter=leads,
                 require_internal_targets=require_internal_targets,
                 require_all_selected_members=require_all_selected_members,
+                max_days_count=max_days_count,
             )
             if not records:
                 raise ValueError(
@@ -506,13 +510,11 @@ class MEPSNPYWindowDataModule(L.LightningDataModule):
         self,
         # --- Dataset-facing keys (forwarded to MEPSWindowDataset) ---
         root: str = ".",
-        sequences_csv: Optional[str] = None,   # single CSV; will be split by `split`
-        # filtering
+        sequences_csv: Optional[str] = None,
         members: Optional[Sequence[int]] = None,
         leads: Optional[Sequence[int]] = None,
         require_internal_targets: bool = True,
         require_all_selected_members: bool = True,
-        # dataset behavior
         sample_mode: Literal["ensemble", "per_member"] = "per_member",
         file_channel_indices: Sequence[int] = (0, 1, 2),
         # normalization
@@ -527,20 +529,17 @@ class MEPSNPYWindowDataModule(L.LightningDataModule):
         # dtype / IO
         dtype: Literal["float32", "float16", "bfloat16", "float64"] = "float32",
         mmap: bool = True,
-
         # --- Loader ---
         batch_size: int = 32,
         num_workers: int = 2,
         pin_memory: bool = True,
         persistent_workers: Optional[bool] = None,
         shuffle_train: bool = True,
-
+        max_days_count: int = -1,
         # --- Split ---
-        split: Optional[Dict[str, Any]] = None,  # e.g. {type: ratio, test: 0.1, n_train_days_per_block: 25, ...}
-
+        split: Optional[Dict[str, Any]] = None,  # e.g. {...}
     ) -> None:
         super().__init__()
-        # Store
         self.root = root
         self.sequences_csv = sequences_csv
 
@@ -570,13 +569,12 @@ class MEPSNPYWindowDataModule(L.LightningDataModule):
         self.persistent_workers = persistent_workers if persistent_workers is not None else (num_workers > 0)
         self.shuffle_train = shuffle_train
 
+        self.max_days_count = max_days_count  # <-- fixed
         self.split_cfg = SplitConfig(**split) if split is not None else SplitConfig()
 
-        # Datasets
         self.train_set: Optional[Dataset] = None
         self.val_set: Optional[Dataset] = None
         self.test_set: Optional[Dataset] = None
-
     # ---------- Lightning hooks ----------
 
     def prepare_data(self) -> None:
@@ -595,6 +593,7 @@ class MEPSNPYWindowDataModule(L.LightningDataModule):
             leads_filter=self.leads,
             require_internal_targets=self.require_internal_targets,
             require_all_selected_members=self.require_all_selected_members,
+            max_days_count = self.max_days_count
         )
 
     def _ratio_split_blocked(self, records: List[Dict[str, Any]]):

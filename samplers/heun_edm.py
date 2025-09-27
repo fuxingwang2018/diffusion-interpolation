@@ -1,5 +1,6 @@
 # samplers/heun_edm.py
-import torch, math
+import torch
+from .base import SamplerBase
 
 def _karras_sigma_schedule(steps, sigma_min, sigma_max, rho, device):
     i = torch.linspace(0, steps-1, steps, device=device)
@@ -7,20 +8,16 @@ def _karras_sigma_schedule(steps, sigma_min, sigma_max, rho, device):
     s = sigma_max**inv + (sigma_min**inv - sigma_max**inv) * i / max(steps-1, 1)
     return s**rho
 
-class HeunEDMSampler:
+class HeunEDMSampler(SamplerBase):
     def __init__(self, steps: int = 40, sigma_min: float = 0.002, sigma_max: float = 80.0, rho: float = 7.0):
-        self.steps = steps
-        self.sigma_min = sigma_min
-        self.sigma_max = sigma_max
-        self.rho = rho
+        self.steps, self.sigma_min, self.sigma_max, self.rho = int(steps), float(sigma_min), float(sigma_max), float(rho)
+
+    @property
+    def name(self) -> str:
+        return "heun_edm"
 
     @torch.no_grad()
-    def sample(self, module, cond, target_shape, device):
-        """
-        module: DiffusionLightning
-        cond: (B, 2*C or 2*Clat, H, W)
-        target_shape: (B, K*C or K*Clat, H, W)
-        """
+    def sample(self, module, cond, target_shape, device, **kwargs):
         B, C_t, H, W = target_shape
         x = torch.randn(B, C_t, H, W, device=device) * self.sigma_max
         sigmas = _karras_sigma_schedule(self.steps, self.sigma_min, self.sigma_max, self.rho, device)

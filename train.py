@@ -12,7 +12,7 @@ from hydra import main as hydra_main
 from hydra.utils import instantiate
 from lightning.pytorch.utilities.rank_zero import rank_zero_info
 import logging
-
+ 
 from utils.log_hydra import log_cfg_to_mlflow
 
 LOGGER = logging.getLogger("trainer")
