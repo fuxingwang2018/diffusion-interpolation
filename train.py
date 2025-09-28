@@ -31,7 +31,13 @@ def main(cfg: DictConfig) -> None:
         torch.set_float32_matmul_precision("high")
     except Exception:
         pass
+    # save config to file
+    cfg_dir = Path(cfg.get("_work_dir", "."))  # hydra sets cwd to a new dir
+    cfg_dir.mkdir(parents=True, exist_ok=True)
 
+    with open(cfg_dir / f"config.yaml", "w") as f:
+       OmegaConf.save(config=cfg, f=f.name, resolve=True)
+    
     # --------- data & model ----------
     dm = instantiate(cfg.datamodule, _recursive_=False)
     model = instantiate(cfg.model, _recursive_=False, _convert_="partial")

@@ -1,8 +1,11 @@
 _data_dir: ${oc.env:DATA_DIR,/home/users/u101329/p200177_t1_hp/u101329/npy_interp/}
 _root_dir: ${oc.env:ROOT_DIR,/home/users/u101329/p200177_t2/u101329/diffusion-interp}
 _mlflow_dir: ${oc.env:MLFLOW_DIR,/home/users/u101329/p200177_t2/u101329/_mlruns}
-_work_dir: ${oc.env:WORK_DIR,${_root_dir}/_work}
+_run_name: "ddpm-npy-1-year_${now:%Y%m%d_%H%M%S}"
+_work_dir: ${oc.env:WORK_DIR,${_root_dir}/_work/${_run_name}}
 _checkpoints_dir: ${_work_dir}/checkpoints
+
+
 
 resume_from_ckpt: none  # none, file, best or last
 ckpt_path: ${_checkpoints_dir}/last.ckpt # if resume_from_ckpt=file
@@ -17,7 +20,7 @@ defaults:
   - _self_
 
 logger:
-  run_name: "ddpm-npy-1-year_${now:%Y%m%d_%H%M%S}"
+  run_name: ${_run_name}  # if None, use timestamp
 # Hydra 1.3+ config
 seed: 42
 

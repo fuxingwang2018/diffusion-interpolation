@@ -35,13 +35,10 @@ export MASTER_PORT=${MASTER_PORT:-29501}
 
 
 
-
-
-
 echo "Job $SLURM_JOB_ID on $(hostname). Launching $SLURM_NTASKS tasks..."
 echo "Node sees GPUs:"
 nvidia-smi -L || true
 
 # Launch 4 *separate* processes; Slurm sets CUDA_VISIBLE_DEVICES per task automatically
 HYDRA_FULL_ERROR=1 SLURM_NNODES=$SLURM_NNODES srun --gpu-bind=single:1 --cpu-bind=cores  \
- python3 -u train.py -cn apptainer_config.yaml
+  python3 -u train.py -cn ddp_config.yaml

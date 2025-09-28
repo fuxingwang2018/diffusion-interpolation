@@ -46,11 +46,11 @@ python make_sequences.py \
   --start-date 2023-01-01T00:00:00Z \
   --end-date 2024-12-31T00:00:00Z \
   --merge-root merged_samples \
-  --out sequences-test5.csv  \
-  --extra-out sequences-for-stats-test5.csv \
+  --out sequences-2023-2024.csv  \
+  --extra-out sequences-for-stats-2023-2024.csv \
   --no-verify-fs
 
-python make_stats.py --file-list sequences-for-stats-test5.csv --root-dir merged_samples --out sequences-stats-test5.npz
+python make_stats.py --file-list sequences-for-stats-2023-2024.csv --root-dir merged_samples --out sequences-stats-2023-2024.npz
 
 python correct_merged.py --file-list sequences-test5.csv --root  merged_samples --out  sequences-test5-corrected.csv
 
