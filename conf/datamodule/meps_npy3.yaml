@@ -11,7 +11,7 @@ require_internal_targets: true                     # need at least one internal 
 require_all_selected_members: true                 # skip windows missing any requested member
 # Sample building
 sample_mode: per_member                              # ensemble | per_member
-file_channel_indices: [0, 1, 2]                    # pick C channels from each (4,H,W)
+file_channel_indices: [0, 1, 2, 3]                    # pick C channels from each (4,H,W)
 # Normalization
 normalize: symrange                                    # none | zscore | symrange
 stats_npz: ${_data_dir}/sequences-stats-test3.npz

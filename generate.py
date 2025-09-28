@@ -53,6 +53,62 @@ def _cond_to_btchw_from_y(cond_bchw: torch.Tensor, y_btchw: torch.Tensor) -> tor
         raise RuntimeError(f"cond/y channel mismatch: cond={C2}, y C={C}")
     return cond_bchw.view(B, 2, C, H, W)
 
+def _plot_per_channel_diff(
+    gt_bt: torch.Tensor,     # (B,T,C,H,W)
+    pred_bt: torch.Tensor,   # (B,T,C,H,W)
+    outdir: str,
+    stem: str,
+    title_prefix: str = "",
+    cmap: str = "coolwarm",
+    vmax = None
+):
+    """
+    For each channel c, save a figure with 1 row and T columns showing (pred - gt)
+    at each internal step. No conditioning columns (they'd be zero by definition).
+
+    Files: <outdir>/<stem>__diff_ch{c:02d}.png
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    isvmax = vmax is not None
+    assert vmax > 0, "vmax must be positive"
+
+
+    ygt  = gt_bt[0].detach().float().cpu()    # (T,C,H,W)
+    ypr  = pred_bt[0].detach().float().cpu()  # (T,C,H,W)
+    diff = ypr - ygt                           # (T,C,H,W)
+
+    T, C, H, W = diff.shape
+
+    for c in range(C):
+        d = diff[:, c]                        # (T,H,W)
+        # symmetric color scale around 0 (diverging)
+        vvmax = float (d.max())
+        vvmin = float (d.min())
+        amax = vmax if isvmax else d.abs().max()
+        vmax = amax
+        vmin = -amax
+
+        fig, axes = plt.subplots(1, T, figsize=(T * 2.1, 2.1))
+        if T == 1:
+            axes = [axes]
+
+        for k in range(T):
+            im = axes[k].imshow(d[k], cmap=cmap, vmin=vmin, vmax=vmax)
+            axes[k].axis("off")
+            axes[k].set_title(f"Δ t={k+1}", fontsize=8)
+
+        # one colorbar for the whole row
+        #fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.025, pad=0.01)
+
+        if title_prefix:
+            fig.suptitle(f"{title_prefix} | diff (pred−gt) [{vvmin:0.2f}, {vvmax:0.2f}] ch={c}", fontsize=10)
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
+
+        out_path = os.path.join(outdir, f"{stem}__diff_ch{c:02d}.png")
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
 
 def _plot_per_channel_two_rows(
     cond_bt: torch.Tensor,   # (B,2,C,H,W)
@@ -214,7 +270,15 @@ def main(cfg: DictConfig) -> None:
                 vmin = None,
                 vmax = None,
             )
-        
+            _plot_per_channel_diff(
+                gt_bt=target_bt,
+                pred_bt=pred_bt,
+                outdir=outdir,
+                stem=stem,
+                title_prefix=f"[{cfg.split}] batch={bidx}",
+                cmap="coolwarm",  # diverging; center at 0
+                vmax=0.15,
+            )
             print(f"Saved per-channel figs: {os.path.join(outdir, stem)}__ch**.png", flush=True)
             num_done += 1
             if num_done >= cfg.batches:

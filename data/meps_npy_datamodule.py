@@ -258,7 +258,7 @@ class MEPSWindowDataset(Dataset):
 
         # Dataset behavior
         sample_mode: Literal["ensemble", "per_member"] = "per_member",
-        file_channel_indices: Sequence[int] = (0, 1, 2),
+        file_channel_indices: Sequence[int] = (0, 1, 2 , 3),
 
         # Normalization
         normalize: Literal["none", "zscore", "symrange"] = "none",
@@ -519,7 +519,7 @@ class MEPSNPYWindowDataModule(L.LightningDataModule):
         require_internal_targets: bool = True,
         require_all_selected_members: bool = True,
         sample_mode: Literal["ensemble", "per_member"] = "per_member",
-        file_channel_indices: Sequence[int] = (0, 1, 2),
+        file_channel_indices: Sequence[int] = (0, 1, 2, 3),
         # normalization
         normalize: Literal["none", "zscore", "symrange"] = "symrange",
         stats_npz: Optional[str] = None,
