@@ -168,3 +168,48 @@ apptainer exec \
         python train.py -cn apptainer_config_test.yaml  #test_meps_numpy_datamodule.py #
     "
 ```
+
+## generate samples
+
+- With simple python
+```bash
+
+module load env/release/2024.1
+module load Python/3.12.3-GCCcore-13.3.0 
+python -m venv .venv 
+source .venv/bin/activate
+
+
+python generate.py  -cn ddp_config_generate.yaml
+ 
+
+```
+
+-- with apptainer
+```bash
+module load env/release/2024.1
+module load Apptainer/1.3.6-GCCcore-13.3.0
+module load git
+
+
+
+DATA_DIR=/home/users/u101329/p200177_t1_hp/u101329/npy_interp
+CKPT_FILE=/home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/epoch=231-val_loss=0.002.ckpt
+OUT_DIR=/home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/samples
+
+
+SIF_FILE=../containers/container.sif 
+apptainer exec \
+    --nv \
+    --containall \
+    --bind .:/code \
+    --bind $DATA_DIR:$DATA_DIR \
+    --bind $CKPT_FILE:$CKPT_FILE \
+    --bind $OUT_DIR:$OUT_DIR \
+    $SIF_FILE \
+    bash -c "
+        set -e
+        cd /code
+        python generate.py  -cn ddp_config_generate.yaml
+    "
+```

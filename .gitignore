@@ -1,3 +1,5 @@
+_saved/epoch*.ckpt
+_saved/samples/
 figures/
 *.pyc
 _work*

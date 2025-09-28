@@ -1,0 +1,24 @@
+_data_dir: ${oc.env:DATA_DIR,/home/users/u101329/p200177_t1_hp/u101329/npy_interp/}
+ckpt_file: /home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/epoch=231-val_loss=0.002.ckpt
+outdir: /home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/samples
+batches: 10  # -1 means all batches
+device: cuda:0
+
+
+split: val # val, test, train
+
+defaults:
+  - datamodule: meps_npy
+  - model: ddpm_attention
+  - sampler: heun_edm
+  - _self_
+
+
+datamodule:
+  batch_size: 1  
+seed: 42
+
+data_shape:
+  x_shape: [2, 3, 256, 256]  # T, C, H, W or M, T, C, H, W if ensemble
+  y_shape: [5, 3, 256, 256]  # T, C, H, W or M, T, C, H, W if ensemble
+

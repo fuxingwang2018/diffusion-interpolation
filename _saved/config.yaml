@@ -1,0 +1,136 @@
+trainer:
+  accelerator: gpu
+  enable_checkpointing: true
+  devices: 4
+  strategy: ddp
+  precision: bf16-mixed
+  max_epochs: 1000
+  log_every_n_steps: 1
+  deterministic: false
+  num_nodes: 8
+  accumulate_grad_batches: 1
+  gradient_clip_val: 1.0
+  enable_progress_bar: false
+datamodule:
+  _target_: data.MEPSNPYWindowDataModule
+  root: /home/users/u101329/p200177_t1_hp/u101329/npy_interp//merged_samples
+  sequences_csv: /home/users/u101329/p200177_t1_hp/u101329/npy_interp//sequences-2023-2024.csv
+  members: null
+  leads: null
+  require_internal_targets: true
+  require_all_selected_members: true
+  sample_mode: per_member
+  file_channel_indices:
+  - 0
+  - 1
+  - 2
+  normalize: symrange
+  stats_npz: /home/users/u101329/p200177_t1_hp/u101329/npy_interp//sequences-stats-2023-2024.npz
+  mean_key: mean
+  std_key: std
+  average_key: global_mean
+  global_min_key: global_min
+  global_max_key: global_max
+  norm_const: 0.95
+  batch_size: 8
+  num_workers: 2
+  pin_memory: true
+  shuffle_train: true
+  dtype: float32
+  mmap: true
+  split:
+    type: ratio
+    test: 0.1
+    n_train_days_per_block: 25
+    skip_after_train_days: 2
+    n_val_days_per_block: 3
+    skip_after_val_days: 2
+    start_with: train
+model:
+  _target_: models.EDM
+  data_shape:
+    x_shape:
+    - 2
+    - 3
+    - 256
+    - 256
+    y_shape:
+    - 5
+    - 3
+    - 256
+    - 256
+  sigma_data: 0.5
+  p_mean: 0.0
+  p_std: 1.0
+  network_cfg:
+    _target_: networks.UNet2D
+    attn_resolutions:
+    - 8
+    - 16
+  sampler_cfg:
+    _target_: samplers.HeunEDMSampler
+    steps: 40
+    sigma_min: 0.002
+    sigma_max: 80.0
+    rho: 7.0
+  optimizer_cfg:
+    _target_: torch.optim.Adam
+    lr: 0.0001
+    betas:
+    - 0.9
+    - 0.999
+  scheduler_cfg:
+    _target_: torch.optim.lr_scheduler.ExponentialLR
+    gamma: 0.9999
+callbacks:
+- _target_: callbacks.GPUsAssignedCallback
+- _target_: callbacks.GPUMemoryMonitorCallback
+  every_n_steps: 50
+- _target_: callbacks.SampleOnValEndCallback
+  every_n_epochs: 10
+  save_npz: true
+  out_dir: /home/users/u101329/p200177_t2/u101329/diffusion-interp/_work/ddpm-npy-1-year_20250928_063342/samples
+  max_plot_channels: 3
+- _target_: lightning.pytorch.callbacks.ModelCheckpoint
+  monitor: val_loss
+  mode: min
+  save_top_k: 3
+  save_last: true
+  filename: '{epoch}-{val_loss:.3f}'
+  dirpath: /home/users/u101329/p200177_t2/u101329/diffusion-interp/_work/ddpm-npy-1-year_20250928_063342/checkpoints
+- _target_: lightning.pytorch.callbacks.LearningRateMonitor
+  logging_interval: step
+logger:
+  _target_: lightning.pytorch.loggers.MLFlowLogger
+  experiment_name: meps-interpolation
+  run_name: ddpm-npy-1-year_20250928_063342
+  tracking_uri: file:/home/users/u101329/p200177_t2/u101329/_mlruns
+  tags:
+    project: diffusion_interpolation
+  synchronous: false
+sampler:
+  _target_: samplers.HeunEDMSampler
+  steps: 40
+  sigma_min: 0.002
+  sigma_max: 80.0
+  rho: 7.0
+_data_dir: /home/users/u101329/p200177_t1_hp/u101329/npy_interp/
+_root_dir: /home/users/u101329/p200177_t2/u101329/diffusion-interp
+_mlflow_dir: /home/users/u101329/p200177_t2/u101329/_mlruns
+_run_name: ddpm-npy-1-year_20250928_063342
+_work_dir: /home/users/u101329/p200177_t2/u101329/diffusion-interp/_work/ddpm-npy-1-year_20250928_063342
+_checkpoints_dir: /home/users/u101329/p200177_t2/u101329/diffusion-interp/_work/ddpm-npy-1-year_20250928_063342/checkpoints
+resume_from_ckpt: none
+ckpt_path: /home/users/u101329/p200177_t2/u101329/diffusion-interp/_work/ddpm-npy-1-year_20250928_063342/checkpoints/last.ckpt
+seed: 42
+data_shape:
+  x_shape:
+  - 2
+  - 3
+  - 256
+  - 256
+  y_shape:
+  - 5
+  - 3
+  - 256
+  - 256
