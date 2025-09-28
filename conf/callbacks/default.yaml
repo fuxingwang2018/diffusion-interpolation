@@ -5,7 +5,7 @@
   every_n_steps: 50
 
 - _target_: callbacks.SampleOnValEndCallback
-  every_n_epochs: 1
+  every_n_epochs: 10
   save_npz: true
   out_dir: ${_work_dir}/samples
   max_plot_channels: 3

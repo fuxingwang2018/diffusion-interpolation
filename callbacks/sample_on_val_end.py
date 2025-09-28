@@ -23,7 +23,7 @@ class SampleOnValEndCallback(L.Callback):
         self.max_plot_channels = max_plot_channels
         self._cache: Optional[Tuple[torch.Tensor, torch.Tensor, Optional[Dict]]] = None
 
-    def on_validation_batch_end(
+    def on_validation_batch_end( #  on_train_batch_end(
         self,
         trainer: L.Trainer,
         pl_module: L.LightningModule,
@@ -64,7 +64,10 @@ class SampleOnValEndCallback(L.Callback):
 
         # run sampler -> prediction shaped like target
         with torch.no_grad():
-            y_pred = pl_module.sample_from_cond(cond, shape_target=target.shape[1:4])
+            y_pred = pl_module.sample(cond=cond, target_shape=target.shape)
+        print(f"y_pred.shape: {y_pred.shape}, target.shape: {target.shape}")
+        print(f"y_pred.abs().min(): {y_pred.abs().min()}, y_pred.abs().max(): {y_pred.abs().max()}")
+        print(f"cond.abs().min(): {cond.abs().min()}, cond.abs().max(): {cond.abs().max()}")
 
         # simple plotting util (kept minimal)
         def _grid(t: torch.Tensor, title: str, max_ch=3):
