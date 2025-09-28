@@ -5,7 +5,7 @@ batches: 10  # -1 means all batches
 device: cuda:0
 
 
-split: train # val, test, train
+split: test # val, test, train
 
 defaults:
   - datamodule: meps_npy

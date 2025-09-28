@@ -26,7 +26,7 @@ import lightning as L
 from omegaconf import DictConfig, OmegaConf
 from hydra import main as hydra_main
 from hydra.utils import instantiate
-
+import numpy as np 
 
 # ---------------- small helpers ----------------
 
@@ -53,6 +53,46 @@ def _cond_to_btchw_from_y(cond_bchw: torch.Tensor, y_btchw: torch.Tensor) -> tor
         raise RuntimeError(f"cond/y channel mismatch: cond={C2}, y C={C}")
     return cond_bchw.view(B, 2, C, H, W)
 
+def radial_psd_1d(img_2d: torch.Tensor, H: int, W: int, nbins: int = 256 , eps: float = 1e-12) -> tuple[np.ndarray, np.ndarray]:
+    """
+    img_2d: (H, W) tensor (float, on CPU)
+    Returns:
+        k:    (nbins,) radial frequency (0..Nyquist, cycles/pixel)
+        ps1d: (nbins,) radial power spectrum (mean |F|^2 within each annulus)
+    """
+    x = img_2d.numpy()
+    # 2D FFT and power
+    F = np.fft.fft2(x)
+    P = (F.real**2 + F.imag**2)
+
+    # Build frequency radii in cycles/pixel (0 at DC, up to ~0.5 Nyquist)
+    fy = np.fft.fftfreq(H)  # [-0.5,0.5) scaled to cycles/pixel
+    fx = np.fft.fftfreq(W)
+    FY, FX = np.meshgrid(fy, fx, indexing="ij")
+    R = np.sqrt(FX**2 + FY**2)  # radial frequency
+
+    # Bin edges from 0 .. max radius (Nyquist)
+    r_max = 0.5 * np.sqrt(2.0)  # diagonal Nyquist; we’ll clamp at 0.5 to show up to Nyquist
+    # Better: cap to 0.5 (max along axes)
+    r_cap = 0.5
+    r = np.clip(R, 0.0, r_cap)
+
+    # Choose bins uniformly in [0, r_cap]
+    nb = min(nbins, max(8, min(H, W) // 2))
+    edges = np.linspace(0.0, r_cap, nb + 1)
+    idx = np.digitize(r.ravel(), edges) - 1  # 0..nb-1
+    idx = np.clip(idx, 0, nb - 1)
+
+    # Accumulate power and counts per radial bin
+    num = np.bincount(idx, weights=P.ravel(), minlength=nb)
+    den = np.bincount(idx, minlength=nb)
+    den = np.maximum(den, 1)  # avoid div by zero
+    ps1d = num / den
+
+    # Bin centers
+    k = 0.5 * (edges[:-1] + edges[1:])
+    return k, ps1d + eps  # add eps for log stability
+
 def _plot_per_channel_diff(
     gt_bt: torch.Tensor,     # (B,T,C,H,W)
     pred_bt: torch.Tensor,   # (B,T,C,H,W)
@@ -60,52 +100,90 @@ def _plot_per_channel_diff(
     stem: str,
     title_prefix: str = "",
     cmap: str = "coolwarm",
-    vmax = None
+    vmax=None               # optional fixed |diff| max for row 1
 ):
     """
-    For each channel c, save a figure with 1 row and T columns showing (pred - gt)
-    at each internal step. No conditioning columns (they'd be zero by definition).
+    For each channel c, save a figure with 2 rows and T columns:
 
-    Files: <outdir>/<stem>__diff_ch{c:02d}.png
+      Row 0: diff image = pred - gt               (diverging colormap, symmetric around 0)
+      Row 1: 1D radial power spectrum of diff     (semilogy plot of radial average of |FFT2(diff)|^2)
+
+    Output files: <outdir>/<stem>__diff_ch{c:02d}.png
     """
+    import os
+    import numpy as np
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    isvmax = vmax is not None
-    assert vmax > 0, "vmax must be positive"
 
+    if vmax is not None:
+        assert vmax > 0, "vmax must be positive when provided"
 
     ygt  = gt_bt[0].detach().float().cpu()    # (T,C,H,W)
     ypr  = pred_bt[0].detach().float().cpu()  # (T,C,H,W)
     diff = ypr - ygt                           # (T,C,H,W)
 
     T, C, H, W = diff.shape
+    eps = 1e-12
+
+    # ---- radial (isotropic) 1D power spectrum helper ----
 
     for c in range(C):
-        d = diff[:, c]                        # (T,H,W)
-        # symmetric color scale around 0 (diverging)
-        vvmax = float (d.max())
-        vvmin = float (d.min())
-        amax = vmax if isvmax else d.abs().max()
-        vmax = amax
-        vmin = -amax
+        d = diff[:, c]  # (T,H,W)
 
-        fig, axes = plt.subplots(1, T, figsize=(T * 2.1, 2.1))
+        # symmetric color scale for diff row
+        if vmax is not None:
+            amax = float(vmax)
+        else:
+            amax = float(d.abs().max())
+            if amax == 0:
+                amax = 1e-6
+        vmin, vmax_sym = -amax, amax
+
+        vvmax = float(d.max())
+        vvmin = float(d.min())
+
+        fig, axes = plt.subplots(2, T, figsize=(T * 2.1, 2 * 2.2))
         if T == 1:
-            axes = [axes]
+            axes = [[axes[0]], [axes[1]]]
+
+        # Row 0: diff images + RMSE in titles
+        for k in range(T):
+            rmse = float(torch.sqrt(torch.mean(d[k] ** 2)))
+            im = axes[0][k].imshow(d[k], cmap=cmap, vmin=vmin, vmax=vmax_sym)
+            axes[0][k].axis("off")
+            axes[0][k].set_title(f"t={k+1}  RMSE={rmse:.3f}", fontsize=8)
+
+        # Row 1: 1D power spectra (semilogy)
+        # Keep shared y-limits across columns for comparability
+        ymins, ymaxs = [], []
+        spectra = []
+        freqs = None
+        for k in range(T):
+            fk, pk = radial_psd_1d(d[k].cpu(), H, W, eps=eps)
+            spectra.append((fk, pk))
+            freqs = fk if freqs is None else freqs
+            ymins.append(pk.min())
+            ymaxs.append(pk.max())
+
+        ylo = max(min(ymins), eps)
+        yhi = max(ymaxs)
 
         for k in range(T):
-            im = axes[k].imshow(d[k], cmap=cmap, vmin=vmin, vmax=vmax)
-            axes[k].axis("off")
-            axes[k].set_title(f"Δ t={k+1}", fontsize=8)
-
-        # one colorbar for the whole row
-        #fig.colorbar(im, ax=axes, orientation="vertical", fraction=0.025, pad=0.01)
+            fk, pk = spectra[k]
+            axes[1][k].semilogy(fk, pk)
+            axes[1][k].grid(True, alpha=0.3, linewidth=0.5)
+            axes[1][k].set_ylim([ylo, yhi * 1.05])
+            # x up to Nyquist (0.5 cycles/pixel)
+            axes[1][k].set_xlim([0.0, 0.5])
+            if k == 0:
+                axes[1][k].set_ylabel("Power (log)", fontsize=8)
+            axes[1][k].set_xlabel("freq (cycles/pixel)", fontsize=8)
 
         if title_prefix:
-            fig.suptitle(f"{title_prefix} | diff (pred−gt) [{vvmin:0.2f}, {vvmax:0.2f}] ch={c}", fontsize=10)
-        fig.tight_layout(rect=[0, 0, 1, 0.96])
+            fig.suptitle(f"{title_prefix} | diff (pred−gt) [{vvmin:.2f}, {vvmax:.2f}] ch={c}", fontsize=10)
 
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
         out_path = os.path.join(outdir, f"{stem}__diff_ch{c:02d}.png")
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)

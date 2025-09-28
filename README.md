@@ -189,8 +189,7 @@ python generate.py  -cn ddp_config_generate.yaml
 ```bash
 module load env/release/2024.1
 module load Apptainer/1.3.6-GCCcore-13.3.0
-module load git
-
+ 
 
 
 DATA_DIR=/home/users/u101329/p200177_t1_hp/u101329/npy_interp
