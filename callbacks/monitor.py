@@ -1,8 +1,8 @@
-# utils/gpu_monitors.py
 from __future__ import annotations
 import os, torch
 import lightning as L
 
+ 
 class GPUsAssignedCallback(L.Callback):
     def on_fit_start(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
         r = trainer.global_rank
@@ -15,6 +15,8 @@ class GPUsAssignedCallback(L.Callback):
             f"CVD={os.environ.get('CUDA_VISIBLE_DEVICES')}",
             flush=True,
         )
+
+ 
 
 class GPUMemoryMonitorCallback(L.Callback):
     def __init__(self, every_n_steps: int = 50) -> None:

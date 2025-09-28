@@ -44,7 +44,7 @@ class UpLevel(nn.Module):
     """
     One upsampling level:
       - upsample: ConvTranspose2d (or Identity for the top)
-      - merge: 1x1 conv to bring cat(h, skip) from 2*cur -> cur
+      - merge: 1x1 conv to bring cat(h, skip) from (cur_ch + skip_ch) -> cur_ch
       - blocks: ResBlocks (+ optional attention) that follow after merge
     """
     def __init__(
@@ -58,11 +58,17 @@ class UpLevel(nn.Module):
         use_attn: bool,
         do_upsample: bool,
         dropout: float,
+        skip_ch: int,  # NEW: actual channels of the skip for this level
     ):
         super().__init__()
+        self.do_upsample = do_upsample
         self.upsample = nn.ConvTranspose2d(cur_ch, cur_ch, 4, stride=2, padding=1) if do_upsample else nn.Identity()
-        # After upsample we concatenate skip: channels become cur_ch + cur_ch = 2*cur_ch
-        self.merge = nn.Conv2d(cur_ch * 2, cur_ch, kernel_size=1) if do_upsample else nn.Identity()
+        # project concatenated channels (cur_ch + skip_ch) -> cur_ch
+        self.merge = (
+            nn.Conv2d(cur_ch + skip_ch, cur_ch, kernel_size=1)
+            if do_upsample
+            else nn.Identity()
+        )
 
         blocks = []
         ch_in = cur_ch  # after merge projection
@@ -74,15 +80,12 @@ class UpLevel(nn.Module):
         self.blocks = nn.ModuleList(blocks)
 
     def forward(self, h: torch.Tensor, emb: torch.Tensor, skip: torch.Tensor | None):
-        # upsample
         h = self.upsample(h)
-        # merge with skip (if provided)
-        if not isinstance(self.merge, nn.Identity) and skip is not None:
+        if self.do_upsample and skip is not None:
             if skip.shape[-2:] != h.shape[-2:]:
                 skip = F.interpolate(skip, size=h.shape[-2:], mode="nearest")
             h = torch.cat([h, skip], dim=1)
             h = self.merge(h)
-        # run blocks
         for m in self.blocks:
             h = m(h, emb) if isinstance(m, ResBlock) else m(h)
         return h
@@ -91,7 +94,6 @@ class UpLevel(nn.Module):
 class UNet2D(nn.Module):
     """
     Pure nn.Module UNet backbone with FiLM conditioning.
-    Fixed up path: after concatenating a skip, we project 2*cur -> cur via 1x1 conv.
     """
 
     def __init__(
@@ -102,7 +104,7 @@ class UNet2D(nn.Module):
         ch_mults: tuple[int, ...] = (1, 2, 2, 2),
         num_res_blocks: int = 2,
         emb_dim: int = 256,
-        attn_resolutions: tuple[int, ...] = (8, 16),
+        attn_resolutions: tuple[int, ...] = (None),
         num_heads: int = 4,
         dropout: float = 0.0,
         use_gn: bool = True,
@@ -118,32 +120,25 @@ class UNet2D(nn.Module):
         self.num_heads = num_heads
         self.dropout = dropout
         self.use_gn = use_gn
-        
         chs = [base_ch * m for m in ch_mults]
 
         # Stem
         self.in_conv = nn.Conv2d(in_ch, chs[0], 3, padding=1)
 
-        # ----------------
-        # Down path (store features AFTER each downsample conv to use as skips)
-        # ----------------
+        # Down path
         downs = []
         cur = chs[0]
         for i, ch in enumerate(chs):
-            # residual blocks at current scale
             for _ in range(num_res_blocks):
                 downs.append(ResBlock(cur, ch, emb_dim, dropout, use_gn))
                 cur = ch
                 if (2 ** i) in attn_resolutions:
                     downs.append(SelfAttention2D(cur, num_heads, use_gn=use_gn))
-            # downsample except for the last scale; we will store the downsampled feature as a skip
             if i != len(chs) - 1:
                 downs.append(nn.Conv2d(cur, cur, 3, stride=2, padding=1))
         self.down = nn.ModuleList(downs)
 
-        # ----------------
         # Middle
-        # ----------------
         mid_blocks = [
             ResBlock(cur, cur, emb_dim, dropout, use_gn),
             SelfAttention2D(cur, num_heads, use_gn=use_gn) if (2 ** (len(chs) - 1) in attn_resolutions) else nn.Identity(),
@@ -151,14 +146,13 @@ class UNet2D(nn.Module):
         ]
         self.mid = nn.ModuleList(mid_blocks)
 
-        # ----------------
-        # Up path (structured as levels with explicit merge conv)
-        # ----------------
+        # Up path
         up_levels = []
         for i, ch in list(reversed(list(enumerate(chs)))):
             use_attn = (2 ** i) in attn_resolutions
             do_upsample = i != 0  # all but the topmost level
-            # Each level takes current channels (cur) and produces ch at this scale
+            # The skip used at this level (when upsampling) comes from the downsample at index i-1
+            skip_ch = chs[i - 1] if do_upsample else 0
             up_levels.append(
                 UpLevel(
                     cur_ch=cur,
@@ -170,9 +164,10 @@ class UNet2D(nn.Module):
                     use_attn=use_attn,
                     do_upsample=do_upsample,
                     dropout=dropout,
+                    skip_ch=skip_ch,  # pass actual skip channels
                 )
             )
-            cur = ch  # update for the next (higher) level
+            cur = ch
         self.up_levels = nn.ModuleList(up_levels)
 
         # Head
@@ -186,7 +181,6 @@ class UNet2D(nn.Module):
         skips: list[torch.Tensor] = []
         h = self.in_conv(x)
 
-        # down: run modules; whenever we hit a stride-2 conv, push the result as a skip
         for m in self.down:
             if isinstance(m, ResBlock):
                 h = m(h, emb)
@@ -195,13 +189,11 @@ class UNet2D(nn.Module):
                 if isinstance(m, nn.Conv2d) and m.stride == (2, 2):
                     skips.append(h)
 
-        # mid
         for m in self.mid:
             h = m(h, emb) if isinstance(m, ResBlock) else m(h)
 
-        # up: traverse levels; each level consumes one skip (except the top level which has no upsample/merge)
         for lvl in self.up_levels:
-            skip = skips.pop() if not isinstance(lvl.upsample, nn.Identity) and skips else None
+            skip = skips.pop() if lvl.do_upsample and skips else None
             h = lvl(h, emb, skip)
 
         return self.out(h)

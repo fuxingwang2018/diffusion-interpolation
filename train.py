@@ -39,8 +39,16 @@ def main(cfg: DictConfig) -> None:
     # --------- logger & callbacks ----------
     logger = instantiate(cfg.logger)
     log_cfg_to_mlflow(logger, cfg)  # safe no-op if not MLflow
-
-    callbacks = [instantiate(cb) for cb in cfg.get("callbacks", [])]
+    
+    _callbacks = cfg.get("callbacks", [])
+    if not cfg.trainer.get("enable_checkpointing", True):
+        for _callback in _callbacks:
+            if _callback.get("_target_", "").endswith("ModelCheckpoint"):
+                rank_zero_info("Disabling ModelCheckpoint callback since checkpointing is off.")
+                _callbacks.remove(_callback)
+                break
+ 
+    callbacks = [instantiate(cb) for cb in _callbacks]
 
     # --- profiler ---
     profiler = None
@@ -77,4 +85,5 @@ if __name__ == "__main__":
     os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "0")
     os.environ.setdefault("NCCL_DEBUG", "INFO")
     os.environ.setdefault("PYTHONFAULTHANDLER", "1")
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     main()

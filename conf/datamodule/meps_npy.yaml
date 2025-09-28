@@ -3,7 +3,7 @@
 _target_: data.MEPSNPYWindowDataModule
 # Data
 root: ${_data_dir}/merged_samples                              # link for tier1 data for high performance
-sequences_csv: ${_data_dir}/sequences-reduced-test.csv         # grouped CSV with JSON columns
+sequences_csv: ${_data_dir}/sequences-reduced-test-corrected.csv          # grouped CSV with JSON columns
 # Which members / leads to include (null = all present in CSV)
 members: null                                      # e.g. [0,1,2]
 leads: null                                        # e.g. [0,1,2,3,4,5,6]
@@ -22,7 +22,7 @@ global_min_key: global_min
 global_max_key: global_max
 norm_const: 0.95
 # Loader
-batch_size: 32
+batch_size: 8  # multiplies by accumulate_grad_batches * devices * num_nodes to get effective batch size
 num_workers: 2
 pin_memory: true
 shuffle_train: true
@@ -30,7 +30,6 @@ dtype: float32
 mmap: true
 # Split
 
-max_days_count: 35 # -1 to consider all days per member
 split:
   type: ratio
   test: 0.1

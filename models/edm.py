@@ -68,7 +68,7 @@ class EDM(DiffusionBase):
         c_skip, c_out, c_in, c_noise = _edm_precond(sigma, self.sigma_data)
         emb = self.emb_mlp(fourier_embed(c_noise))
         net_in = torch.cat([cond_clean, c_in.view(-1, 1, 1, 1) * target_noisy], dim=1)
-        fx = self.net(net_in, emb)
+        fx = self.network(net_in, emb)
         x_hat = c_skip.view(-1, 1, 1, 1) * target_noisy + c_out.view(-1, 1, 1, 1) * fx
         return x_hat
 

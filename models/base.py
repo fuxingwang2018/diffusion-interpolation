@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import lightning as L
+from lightning.pytorch.utilities.rank_zero import rank_zero_info
 
 
 # =========================
@@ -75,7 +76,7 @@ class DiffusionBase(L.LightningModule, ABC):
  
 
         # Conditioning
-
+        
         T, C, _ , _= data_shape['x_shape']
         self.cond_ch = 2 * C
         T, C, _ , _= data_shape['y_shape']
@@ -97,14 +98,19 @@ class DiffusionBase(L.LightningModule, ABC):
 
     @property
     def sampler(self) -> SamplerBase:
+        # lazily instantiate once
         if self._sampler is None:
-           return self._sampler
-        else:
-            self._sampler = instantiate(self.sampler_cfg)
-            if self._sampler.name not in self.allowed_samplers():
-                self._sampler = None
-                raise ValueError(f"Sampler '{self._sampler.name}' not allowed for this model")
+            if self.sampler_cfg is None:
+                raise ValueError("sampler_cfg is not set; cannot create sampler")
+            s = instantiate(self.sampler_cfg)  # e.g. {"_target_": "samplers.HeunEDM", ...}
+            if s.name not in self.allowed_samplers():
+                raise ValueError(f"Sampler '{s.name}' not allowed for this model "
+                                f"(allowed: {self.allowed_samplers()})")
+            self._sampler = s
         return self._sampler
+    # -------- training / validation cache wrapper --------
+
+
 
     # ---------- required API for subclasses ----------
     @abstractmethod
@@ -146,27 +152,26 @@ class DiffusionBase(L.LightningModule, ABC):
         target = y.reshape(B, K * C, H, W)
         return cond, target
 
+
+    def _shared_step(self, batch, stage):
+        """
+        batch = (x, y[, meta])
+        """
+        meta = None
+        if isinstance(batch, (list, tuple)) and len(batch) == 3:
+            x, y, meta = batch
+        else:
+            x, y = batch
+        cond, target = self._pack_xy(x, y)
+        loss = self._compute_loss(cond, target)
+        self.log(f"{stage}_loss", loss, prog_bar=True, on_step=(stage == "train"), on_epoch=True, sync_dist=True)
+        return loss
     # ---------- Lightning ----------
     def training_step(self, batch, _):
-        # allow datamodule to return (x,y,meta) or (x,y)
-        if isinstance(batch, (tuple, list)) and len(batch) == 3:
-            x, y, _ = batch
-        else:
-            x, y = batch
-        cond, target = self._pack_xy(x, y)
-        loss = self._compute_loss(cond, target)
-        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
-        return loss
+        return  self._shared_step(batch, "train")
 
     def validation_step(self, batch, _):
-        if isinstance(batch, (tuple, list)) and len(batch) == 3:
-            x, y, _ = batch
-        else:
-            x, y = batch
-        cond, target = self._pack_xy(x, y)
-        loss = self._compute_loss(cond, target)
-        self.log("val_loss", loss, prog_bar=True, on_epoch=True, sync_dist=True)
-        return loss
+        return self._shared_step(batch, "val")
 
     # ---------- optimizers (Hydra-friendly) ----------
     def configure_optimizers(self):
@@ -183,3 +188,16 @@ class DiffusionBase(L.LightningModule, ABC):
                 # If scheduler instantiation fails, just return the optimizer
                 return opt
         return opt
+
+    @torch.no_grad()
+    def sample(self, cond: torch.Tensor, target_shape: Tuple[int, int, int, int]) -> torch.Tensor:
+        """
+        cond: (B, cond_ch, H, W)  clean conditioning
+        target_shape: (B, target_ch, H, W)  desired target tensor shape
+        """
+        self.eval()
+        out = self.sampler.sample(self, cond, target_shape, cond.device)  # sampler drives the schedule
+        self.train()  # restore if you want to stay in train mode normally
+        return out
+
+   

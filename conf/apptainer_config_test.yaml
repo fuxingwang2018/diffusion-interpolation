@@ -1,0 +1,22 @@
+defaults:
+  - ddp_config
+  - _self_
+
+trainer:
+  devices: 4 #  4 for ddp_spawn and 1 for ddp
+  num_nodes: 1 
+  enable_checkpointing: false
+
+
+datamodule:
+  max_days_count: 35 # -1 to consider all days per member
+  sequences_csv: ${_data_dir}/sequences-reduced-test-corrected.csv          # grouped CSV with JSON columns                               # none | zscore | symrange
+  stats_npz: ${_data_dir}/sequences-stats-reduced-test.npz
+  split:
+    type: ratio
+    test: 0.1
+    n_train_days_per_block: 10
+    skip_after_train_days: 1
+    n_val_days_per_block: 2
+    skip_after_val_days: 1
+    start_with: train

@@ -14,7 +14,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor
 from itertools import repeat
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Iterable
 
 import numpy as np
 import pandas as pd
@@ -78,6 +78,18 @@ def file_stats(
     return fmin, fmax, fsum, fsum_sq, per_channel_elems
 
 
+def _resolve_files(raw_files: Iterable[str], root: Path | None) -> list[Path]:
+    """Resolve to Paths; join with root if relative."""
+    root = root.resolve() if root else None
+    out: list[Path] = []
+    for s in raw_files:
+        p = Path(str(s))
+        if not p.is_absolute() and root is not None:
+            p = root / p
+        out.append(p)
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Compute global stats from merged .npy file-list CSV.")
     ap.add_argument("--file-list", type=Path, required=True, help="CSV file with a column named 'file-list'")
@@ -118,78 +130,107 @@ def main() -> None:
     if "file-list" not in df.columns:
         raise ValueError("CSV must have a column named 'file-list'")
 
-    files = [Path(x) for x in df["file-list"].dropna().astype(str).tolist()]
-    if args.root_dir is not None:
-        files = [args.root_dir / f for f in files]
+    raw_files = df["file-list"].dropna().astype(str).tolist()
+    files_all = _resolve_files(raw_files, args.root_dir)
 
-    total_files = len(files)
-    if total_files == 0:
-        logger.warning("No files found in CSV.")
+    # Keep only existing files; warn for each missing one
+    existing_files: list[Path] = []
+    for p in files_all:
+        if p.exists():
+            existing_files.append(p)
+        else:
+            logger.warning("Missing file (ignored): %s", p)
+
+    total_existing = len(existing_files)
+    if total_existing == 0:
+        logger.warning("No existing files to process after filtering.")
         np.savez(args.out, global_min=[], global_max=[], global_mean=[], global_std=[])
         logger.info("Saved empty stats to %s", args.out)
         return
 
-    # Probe first file to determine number of channels after moving channel axis to front
-    probe = np.load(files[0], mmap_mode="r")
-    if probe.ndim == 3:
-        c_axis = _normalize_axes(3, args.channel_axis)
-        sample = np.moveaxis(probe, c_axis, 0)  # (C, H, W)
-    elif probe.ndim == 4:
-        c_axis = _normalize_axes(4, args.channel_axis)
-        sample = np.moveaxis(probe, c_axis, 0)  # (C, T, H, W) or similar
-    else:
-        raise ValueError(f"Expected 3D or 4D arrays. First file has shape {probe.shape} -> {files[0]}")
-    n_channels = int(sample.shape[0])
+    # Probe first loadable file to infer channel count (skip unreadable with warning)
+    n_channels = None
+    for probe_path in existing_files:
+        try:
+            probe = np.load(probe_path, mmap_mode="r")
+            if probe.ndim == 3:
+                c_axis = _normalize_axes(3, args.channel_axis)
+                sample = np.moveaxis(probe, c_axis, 0)  # (C, H, W)
+            elif probe.ndim == 4:
+                c_axis = _normalize_axes(4, args.channel_axis)
+                sample = np.moveaxis(probe, c_axis, 0)  # (C, T, H, W) or similar
+            else:
+                raise ValueError(f"Expected 3D or 4D arrays, got {probe.shape}")
+            n_channels = int(sample.shape[0])
+            break
+        except Exception as e:
+            logger.warning("Skipping unreadable file during probe: %s (%s)", probe_path, e)
+
+    if n_channels is None:
+        logger.warning("Failed to probe any file; saving empty stats.")
+        np.savez(args.out, global_min=[], global_max=[], global_mean=[], global_std=[])
+        logger.info("Saved empty stats to %s", args.out)
+        return
 
     global_min = np.full(n_channels, np.inf, dtype=np.float64)
     global_max = np.full(n_channels, -np.inf, dtype=np.float64)
     global_sum = np.zeros(n_channels, dtype=np.float64)
     global_sum_sq = np.zeros(n_channels, dtype=np.float64)
-    total_elems = 0  # elements per channel aggregated over all files
-
+    total_elems = 0
     processed = 0
 
-    with ProcessPoolExecutor(max_workers=args.workers) as exe:
-        iterator = exe.map(
-            file_stats,
-            files,                      # fn
-            repeat(args.channel_axis),  # channel_axis_hint
-            repeat(args.time_axis),     # time_axis_hint
-            chunksize=args.chunksize,
-        )
-        for fmin, fmax, fsum, fsum_sq, n_elems in tqdm(
-            iterator, total=total_files, disable=disable_tqdm, desc="Processing files"
-        ):
+    # Process (only) existing files; skip per-file failures with a warning
+    def _iter_safe():
+        with ProcessPoolExecutor(max_workers=args.workers) as exe:
+            iterator = exe.map(
+                file_stats,
+                existing_files,              # fn
+                repeat(args.channel_axis),   # channel_axis_hint
+                repeat(args.time_axis),      # time_axis_hint
+                chunksize=args.chunksize,
+            )
+            for fn, res in zip(existing_files, iterator):
+                yield fn, res
+
+    for fn, res in tqdm(_iter_safe(), total=total_existing, disable=disable_tqdm, desc="Processing files"):
+        try:
+            fmin, fmax, fsum, fsum_sq, n_elems = res
             if fmin.shape[0] != n_channels:
-                raise ValueError("Channel count mismatch between files; check --channel-axis / shapes.")
+                raise ValueError(
+                    f"Channel count mismatch in {fn} (got {fmin.shape[0]}, expected {n_channels}). "
+                    "Check --channel-axis / shapes."
+                )
+        except Exception as e:
+            logger.warning("Skipping file due to error: %s (%s)", fn, e)
+            continue
 
-            global_min = np.minimum(global_min, fmin)
-            global_max = np.maximum(global_max, fmax)
-            global_sum += fsum
-            global_sum_sq += fsum_sq
-            total_elems += n_elems
-            processed += 1
+        global_min = np.minimum(global_min, fmin)
+        global_max = np.maximum(global_max, fmax)
+        global_sum += fsum
+        global_sum_sq += fsum_sq
+        total_elems += n_elems
+        processed += 1
 
-            if processed % 1000 == 0 or processed == total_files:
-                logger.info("Processed %d/%d files (%.1f%%)", processed, total_files, 100 * processed / total_files)
+        if processed % 1000 == 0 or processed == total_existing:
+            logger.info("Processed %d/%d files (%.1f%%)", processed, total_existing, 100 * processed / total_existing)
 
     if total_elems == 0:
-        raise ValueError("Total reduced elements is zero; check array shapes/axes.")
+        logger.warning("Total reduced elements is zero after filtering/processing; saving empty stats.")
+        np.savez(args.out, global_min=[], global_max=[], global_mean=[], global_std=[])
+        logger.info("Saved empty stats to %s", args.out)
+        return
 
     global_mean = global_sum / total_elems
-    # Var = E[x^2] - (E[x])^2
     global_var = global_sum_sq / total_elems - global_mean ** 2
-    global_var = np.maximum(global_var, 0.0)  # clamp tiny negatives
+    global_var = np.maximum(global_var, 0.0)
     global_std = np.sqrt(global_var)
 
-    # Report
     for i in range(n_channels):
         logger.info(
             "Channel %d: min=% .6g, max=% .6g, mean=% .6g, std=% .6g",
             i, global_min[i], global_max[i], global_mean[i], global_std[i]
         )
 
-    # Save all stats into a single .npz file
     np.savez(
         args.out,
         global_min=global_min,

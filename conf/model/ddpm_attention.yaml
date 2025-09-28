@@ -12,8 +12,10 @@ p_std: 1.0
 #snr_gamma: 5.0          # only for snr
 
 
+
 network_cfg:
   _target_: networks.UNet2D
+  attn_resolutions: [8, 16]
 
 
 sampler_cfg: ${sampler}
