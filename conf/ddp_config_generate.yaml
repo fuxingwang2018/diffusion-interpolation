@@ -1,10 +1,12 @@
 _data_dir: ${oc.env:DATA_DIR,/home/users/u101329/p200177_t1_hp/u101329/npy_interp/}
-ckpt_file: /home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/epoch=231-val_loss=0.002.ckpt
-outdir: /home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/samples
+ckpt_file: /home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/ruvt-epoch=478-val_loss=0.001.ckpt
+outdir: /home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/samples/ruvt-epoch=478-val_loss=0.001
+
 batches: 10  # -1 means all batches
 device: cuda:0
+seed: 42
 
-
+skip_batches: 100  # skip N batches from start
 split: test # val, test, train
 
 defaults:
@@ -13,12 +15,13 @@ defaults:
   - sampler: heun_edm
   - _self_
 
-
 datamodule:
-  batch_size: 1  
-seed: 42
+  batch_size: 1
+  file_channel_indices: [0,1,2,3]
+
+
 
 data_shape:
-  x_shape: [2, 3, 256, 256]  # T, C, H, W or M, T, C, H, W if ensemble
-  y_shape: [5, 3, 256, 256]  # T, C, H, W or M, T, C, H, W if ensemble
+  x_shape: [2, 4, 256, 256]  # T, C, H, W or M, T, C, H, W if ensemble
+  y_shape: [5, 4, 256, 256]  # T, C, H, W or M, T, C, H, W if ensemble
 

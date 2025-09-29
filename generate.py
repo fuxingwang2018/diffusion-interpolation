@@ -93,6 +93,102 @@ def radial_psd_1d(img_2d: torch.Tensor, H: int, W: int, nbins: int = 256 , eps: 
     k = 0.5 * (edges[:-1] + edges[1:])
     return k, ps1d + eps  # add eps for log stability
 
+import numpy as np
+
+def radial_isotropic_spectrum(
+    img_2d: np.ndarray,
+    dx: float = 1.0,
+    dy: float = 1.0,
+    nbins: int = 256,
+    detrend: bool = True,
+    window: str | None = "hann",
+    eps: float = 1e-12,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Meteorology-style isotropic spectrum E(k) from a 2-D field on a uniform Cartesian grid.
+    - Ignores latitude/longitude area weighting (treats pixels equally).
+    - Normalized so that sum(E(k) * dk) ≈ mean(x^2)  (variance if mean removed).
+
+    Parameters
+    ----------
+    img_2d : (H, W) array-like (float)
+        Field to analyze (e.g., KE, T, Z, or simply the difference field).
+    dx, dy : float
+        Grid spacing in x and y (e.g., km, m, etc.). k is returned in cycles per same unit.
+    nbins : int
+        Number of radial bins between k=0 and the Nyquist k=0.5/d (per axis).
+    detrend : bool
+        If True, remove the mean (recommended if you want variance rather than mean-square).
+    window : str or None
+        Taper to reduce spectral leakage. One of {"hann","hamming","blackman"} or None.
+    eps : float
+        Small value to stabilize logs.
+
+    Returns
+    -------
+    k_center : (nbins,) array
+        Radial wavenumber bin centers (cycles per unit).
+    E_k : (nbins,) array
+        Isotropic spectrum such that sum(E_k * dk) ≈ mean-square of the input field.
+    """
+    x = np.asarray(img_2d, dtype=np.float64, order="C")
+    H, W = x.shape
+
+    # Optional mean removal
+    if detrend:
+        x = x - x.mean()
+
+    # Optional separable window (rectangular if None or unknown)
+    if window in {"hann", "hamming", "blackman"}:
+        wy = getattr(np, window)(H) if hasattr(np, window) else np.hanning(H)
+        wx = getattr(np, window)(W) if hasattr(np, window) else np.hanning(W)
+        w2d = np.outer(wy, wx)
+    else:
+        w2d = np.ones_like(x)
+
+    xw = x * w2d
+
+    # Forward 2-D FFT (NumPy forward is unnormalized; inverse divides by HW)
+    F = np.fft.fft2(xw)
+    # 2-D power
+    P2D = (F.real**2 + F.imag**2)
+
+    # Window-power correction so Parseval holds after tapering
+    win_power = (w2d**2).sum()  # equals HW for boxcar
+    # Parseval (discrete): mean(x^2) = (1/(HW)^2) * sum(P2D) * (dx*dy factors cancel in discrete setting here)
+    P2D = P2D / (win_power**2) * (H*W)**2  # rescale so that rectangular window case is preserved
+
+    # Frequencies in cycles per unit (NOT angular). np.fft.fftfreq uses sample spacing:
+    ky = np.fft.fftfreq(H, d=dy)  # length H
+    kx = np.fft.fftfreq(W, d=dx)  # length W
+    KX, KY = np.meshgrid(kx, ky, indexing="xy")
+    KR = np.sqrt(KX**2 + KY**2)
+
+    # Radial bins from 0 to axis Nyquist (0.5/d), not diagonal
+    kmax = min(0.5/dx, 0.5/dy)
+    nb = min(nbins, max(8, int(np.hypot(H, W) // 2)))
+    edges = np.linspace(0.0, kmax, nb + 1)
+    which = np.digitize(np.clip(KR.ravel(), 0.0, kmax), edges) - 1
+    which = np.clip(which, 0, nb - 1)
+
+    # Average 2-D power within each annulus
+    num = np.bincount(which, weights=P2D.ravel(), minlength=nb)
+    den = np.bincount(which, minlength=nb)
+    den = np.maximum(den, 1)
+    Pk_ring_avg = num / den  # ⟨|F|^2⟩ over the ring
+
+    # Convert 2-D PSD to isotropic 1-D density:
+    # E(k) ≈ 2π k * ⟨P2D⟩_ring / (H*W)^2  with our scaling chosen such that:
+    # sum_k E(k) Δk  ≈ mean(x^2)
+    k_center = 0.5 * (edges[:-1] + edges[1:])
+    dk = edges[1] - edges[0] if nb > 1 else kmax
+    E_k = (2.0 * np.pi * k_center) * Pk_ring_avg / (H * W)**2
+
+    # Small epsilon for log plots (does not affect integrals)
+    E_k = np.maximum(E_k, eps)
+    return k_center, E_k
+
+
 def _plot_per_channel_diff(
     gt_bt: torch.Tensor,     # (B,T,C,H,W)
     pred_bt: torch.Tensor,   # (B,T,C,H,W)
@@ -160,7 +256,7 @@ def _plot_per_channel_diff(
         spectra = []
         freqs = None
         for k in range(T):
-            fk, pk = radial_psd_1d(d[k].cpu(), H, W, eps=eps)
+            fk, pk = radial_isotropic_spectrum (d[k].cpu()) # radial_psd_1d(d[k].cpu(), H, W, eps=eps)
             spectra.append((fk, pk))
             freqs = fk if freqs is None else freqs
             ymins.append(pk.min())
@@ -325,12 +421,9 @@ def main(cfg: DictConfig) -> None:
             
             cond, target = model._pack_xy(x, y)
       
-            # Predict (DiffusionBase.sample uses sampler; SimpleModel does direct forward)
+            # Predict
             pred = model.sample(cond, target.shape)
              
-            
-           
-
             # Shapes for plotting
             target_bt = _ensure_btchw(target, guide_y=y)
             pred_bt   = _ensure_btchw(pred, guide_y=y)

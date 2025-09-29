@@ -193,7 +193,7 @@ module load Apptainer/1.3.6-GCCcore-13.3.0
 
 
 DATA_DIR=/home/users/u101329/p200177_t1_hp/u101329/npy_interp
-CKPT_FILE=/home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/epoch=231-val_loss=0.002.ckpt
+CKPT_DIR=/home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/
 OUT_DIR=/home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/samples
 
 
@@ -203,7 +203,7 @@ apptainer exec \
     --containall \
     --bind .:/code \
     --bind $DATA_DIR:$DATA_DIR \
-    --bind $CKPT_FILE:$CKPT_FILE \
+    --bind $CKPT_DIR:$CKPT_DIR \
     --bind $OUT_DIR:$OUT_DIR \
     $SIF_FILE \
     bash -c "
