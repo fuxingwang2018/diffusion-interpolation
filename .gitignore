@@ -1,5 +1,7 @@
-_saved/epoch*.ckpt
-_saved/samples/
+_saved
+_diffusion-interp-results
+_results
+
 figures/
 *.pyc
 _work*
@@ -9,5 +11,8 @@ _mlruns
 __pycache__/
 outputs/
 slurm*.out
-log.log
+*.log
 old
+
+plots/plots
+plots/.ipynb_checkpoints

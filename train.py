@@ -34,10 +34,10 @@ def main(cfg: DictConfig) -> None:
     # save config to file
     cfg_dir = Path(cfg.get("_work_dir", "."))  # hydra sets cwd to a new dir
     cfg_dir.mkdir(parents=True, exist_ok=True)
-
+   
     with open(cfg_dir / f"config.yaml", "w") as f:
        OmegaConf.save(config=cfg, f=f.name, resolve=True)
-    
+    fine_tune = cfg.get("fine_tune", False) 
     # --------- data & model ----------
     dm = instantiate(cfg.datamodule, _recursive_=False)
     model = instantiate(cfg.model, _recursive_=False, _convert_="partial")
@@ -63,24 +63,33 @@ def main(cfg: DictConfig) -> None:
 
     trainer_cfg = OmegaConf.to_container(cfg.trainer, resolve=True)
     trainer_cfg.pop("profiler", None)
-
+    if fine_tune: 
+        ckpt_path = cfg.get("ckpt_file", None)
+        if ckpt_path is not None and os.path.isfile(ckpt_path):
+            ckpt = torch.load(ckpt_path, map_location="cpu")
+            state = ckpt.get("state_dict", ckpt)
+            missing, unexpected = model.load_state_dict(state, strict=False)
+            print(f"Loaded ckpt for fine-tuning: {ckpt_path}\n  missing={missing}\n  unexpected={unexpected}", flush=True)
+        else:
+            print(f"[warn] fine-tune ckpt not found: {ckpt_path}", flush=True)
     trainer = L.Trainer(**trainer_cfg, profiler=profiler, logger=logger, callbacks=callbacks)
 
     # --------- train ----------
     start_time = time.perf_counter()
 
     ckpt_path = None
-    resume_from = cfg.get("resume_from_ckpt", None)
-    if resume_from in ("last", "best", "file"):
-        for cb in callbacks:
-            if isinstance(cb, L.pytorch.callbacks.ModelCheckpoint):
-                if resume_from == "last" and cb.last_model_path:
-                    ckpt_path = cb.last_model_path
-                elif resume_from == "best" and cb.best_model_path:
-                    ckpt_path = cb.best_model_path
-                elif resume_from == "file":
-                    ckpt_path = cfg.get("ckpt_path", None)
-                break
+    if not fine_tune:
+        resume_from = cfg.get("resume_from_ckpt", None)
+        if resume_from in ("last", "best", "file"):
+            for cb in callbacks:
+                if isinstance(cb, L.pytorch.callbacks.ModelCheckpoint):
+                    if resume_from == "last" and cb.last_model_path:
+                        ckpt_path = cb.last_model_path
+                    elif resume_from == "best" and cb.best_model_path:
+                        ckpt_path = cb.best_model_path
+                    elif resume_from == "file":
+                        ckpt_path = cfg.get("ckpt_path", None)
+                    break
 
     trainer.fit(model, datamodule=dm, ckpt_path=ckpt_path)
 

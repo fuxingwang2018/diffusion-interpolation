@@ -413,6 +413,7 @@ class MEPSWindowDataset(Dataset):
                 "start_valid_time": rec.get("start_valid_time"),
                 "end_valid_time": rec.get("end_valid_time"),
                 "rec_index": int(i),
+                "sample_index": int(i),  # for compatibility with per_member
             }
 
             return (
@@ -444,6 +445,7 @@ class MEPSWindowDataset(Dataset):
             "start_valid_time": rec.get("start_valid_time"),
             "end_valid_time": rec.get("end_valid_time"),
             "rec_index": int(rec_idx),
+            "sample_index": int(i),  # global sample index
         }
 
  
@@ -489,7 +491,7 @@ class SplitConfig:
     train: int = 0
     val: int = 0
     seed: int = 42
-    shuffle_before_split: bool = True
+    shuffle_before_split: bool = False
 
 
 # ============================================================

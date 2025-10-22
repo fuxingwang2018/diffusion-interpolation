@@ -133,6 +133,20 @@ class DiffusionBase(L.LightningModule, ABC):
         ...
 
     # ---------- helpers ----------
+    def _pack_x(self, x: torch.Tensor) -> torch.Tensor :
+        """
+        x: (B, 2, C, H, W) or (2, C, H, W)
+        returns:
+          cond:   (B, 2*C, H, W)
+        """
+        if x.dim() == 4:
+            x = x.unsqueeze(0)
+        B, two, C, H, W = x.shape
+        if not (two == 2  ):
+            raise ValueError(f"Mismatch in (x) shapes: x={tuple(x.shape)}")
+        cond = x.reshape(B, 2 * C, H, W)
+        return cond
+
     def _pack_xy(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         x: (B, 2, C, H, W) or (2, C, H, W)

@@ -75,6 +75,20 @@ python correct_merged.py  sequences-reduced-test.csv  --root  merged_samples --o
 python make_stats.py --file-list sequences-for-stats-reduced-test.csv --root  merged_samples --out sequences-stats-reduced-test.npz
 
 
+The dataset below is for only testing the dataset since I in mistake shuffeled the original one and thus I will consider 2025/01/01 for the real test 
+
+python make_sequences.py \
+  --labels labels.csv \
+  --root /home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep/samples \
+  --windows 0-6,6-12,12-18,18-24,24-30,30-36,36-42 \
+  --start-date 2025-01-01T00:00:00Z \
+  --end-date 2025-03-31T00:00:00Z \
+  --merge-root merged_samples  \
+  --out sequences-2025.csv  \
+  --extra-out sequences-for-stats-2025.csv 
+
+ # Use the same stats as before 
+
 
 
 ```
@@ -170,45 +184,4 @@ apptainer exec \
 ```
 
 ## generate samples
-
-- With simple python
-```bash
-
-module load env/release/2024.1
-module load Python/3.12.3-GCCcore-13.3.0 
-python -m venv .venv 
-source .venv/bin/activate
-
-
-python generate.py  -cn ddp_config_generate.yaml
- 
-
-```
-
--- with apptainer
-```bash
-module load env/release/2024.1
-module load Apptainer/1.3.6-GCCcore-13.3.0
- 
-
-
-DATA_DIR=/home/users/u101329/p200177_t1_hp/u101329/npy_interp
-CKPT_DIR=/home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/
-OUT_DIR=/home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/samples
-
-
-SIF_FILE=../containers/container.sif 
-apptainer exec \
-    --nv \
-    --containall \
-    --bind .:/code \
-    --bind $DATA_DIR:$DATA_DIR \
-    --bind $CKPT_DIR:$CKPT_DIR \
-    --bind $OUT_DIR:$OUT_DIR \
-    $SIF_FILE \
-    bash -c "
-        set -e
-        cd /code
-        python generate.py  -cn ddp_config_generate.yaml
-    "
-```
+- see the file folder [generate](generate/README.md) 

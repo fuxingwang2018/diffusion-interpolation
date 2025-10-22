@@ -1,0 +1,35 @@
+_target_: data.MEPSNPYWindowDataModule
+
+# --- Data sources ---
+root: ${_data_dir}/merged_samples
+sequences_csv: ${_data_dir}/sequences-2023-2024.csv
+
+# --- Optional filters (null = include all) ---
+members: null        # e.g. [0,1,2]
+leads: null           # e.g. [0,6,12,18,24,30,36]
+
+# --- Channels to load (0-based indices into file's C) ---
+file_channel_indices: [1, 2, 3]   # e.g., u10, v10, t2m
+
+# --- IO / dtype ---
+dtype: float32
+mmap: true
+
+# --- Time window (inclusive); sorted chronologically in the dataset ---
+date_range: ["2023-01-01", "2024-12-31"]
+
+# --- DataLoader (no shuffle) ---
+batch_size: 8
+num_workers: 2
+pin_memory: true
+
+
+# Normalization
+normalize: symrange                                    # none | zscore | symrange
+stats_npz: ${_data_dir}/sequences-stats-2023-2024.npz
+mean_key: mean
+std_key: std
+average_key: global_mean                        # if using symrange
+global_min_key: global_min
+global_max_key: global_max
+norm_const: 0.95

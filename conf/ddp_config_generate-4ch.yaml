@@ -6,8 +6,6 @@ batches: -1  # -1 means all batches
 device: specify
 seed: 42
 
-number_of_samples: 1
-
 split: test # val, test, train
 
 defaults:
@@ -15,7 +13,7 @@ defaults:
   - sampler: heun_edm
   - _self_
 
-number_of_channels: 3
+number_of_channels: 4
 datamodule:
   _target_: data.MEPSNPYSamplingWindowDataModule
   # --- Data sources ---
@@ -27,7 +25,7 @@ datamodule:
   leads: null           # e.g. [0,6,12,18,24,30,36]
 
   # --- Channels to load (0-based indices into file's C) ---
-  file_channel_indices: [1, 2, 3]   # e.g., u10, v10, t2m
+  file_channel_indices: [0, 1, 2, 3]   # e.g., u10, v10, t2m
  
   # --- IO / dtype ---
   dtype: float32
@@ -52,6 +50,6 @@ datamodule:
 
 
 data_shape:
-  x_shape: [2, 3, 256, 256]  # T, C, H, W or M, T, C, H, W if ensemble
-  y_shape: [5, 3, 256, 256]  # T, C, H, W or M, T, C, H, W if ensemble
+  x_shape: [2, 4, 256, 256]  # T, C, H, W or M, T, C, H, W if ensemble
+  y_shape: [5, 4, 256, 256]  # T, C, H, W or M, T, C, H, W if ensemble
 
