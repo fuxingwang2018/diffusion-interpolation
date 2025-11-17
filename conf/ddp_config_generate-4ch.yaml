@@ -1,6 +1,6 @@
-_data_dir: ${oc.env:DATA_DIR,/home/users/u101329/p200177_t1_hp/u101329/npy_interp/}
-ckpt_file: /home/users/u101329/p200177_t2/u101329/diffusion-interp/_work/ddpm-npy-uvt-20250929_203652/checkpoints/last.ckpt
-outdir: /home/users/u101329/p200177_t1_hp/u101329/results/samples_uvt
+_data_dir: ${oc.env:DATA_DIR,/mnt/tier1/project/p200177/u101329/npy_interp/}
+ckpt_file: /mnt/tier2/project/p200177/u101329/diffusion-interp/_work/ddpm-npy-uvt-20250929_203652/checkpoints/last.ckpt
+outdir: /mnt/tier1/project/p200177/u101329/results/samples_uvt
 
 batches: -1  # -1 means all batches
 device: specify

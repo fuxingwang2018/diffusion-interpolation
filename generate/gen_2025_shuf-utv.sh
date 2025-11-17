@@ -4,8 +4,8 @@ set -e
 set -x 
 
 
-export DATA_DIR=/home/users/u101329/p200177_t1_hp/u101329/npy_interp
-export OUT_DIR=/home/users/u101329/p200177_t1_hp/u101329/results/samples_shuff_2025 #
+export DATA_DIR=/mnt/tier1/project/p200177/u101329/npy_interp
+export OUT_DIR=/mnt/tier1/project/p200177/u101329/results/samples_shuff_2025 #
 
 export PYTHONPATH=`pwd`:$PYTHONPATH
 members=${1:ERROR}

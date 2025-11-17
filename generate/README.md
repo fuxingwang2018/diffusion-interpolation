@@ -2,8 +2,8 @@
 - With simple python
 ```bash
 
-export DATA_DIR=/home/users/u101329/p200177_t1_hp/u101329/npy_interp
-export OUT_DIR=/home/users/u101329/p200177_t1_hp/u101329/results/samples_shuff_2025_1 #
+export DATA_DIR=/mnt/tier1/project/p200177/u101329/npy_interp
+export OUT_DIR=/mnt/tier1/project/p200177/u101329/results/samples_shuff_2025_1 #
 
 salloc -A p200177  -p gpu   --qos default -N 1 -t 10:00:00
 

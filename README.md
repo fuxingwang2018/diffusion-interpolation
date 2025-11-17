@@ -41,7 +41,7 @@ python tools/calc_stats.py --file-list sequences-for-stats-test3.csv  --root-dir
 
 python make_sequences.py \
   --labels labels.csv \
-  --root /home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep/samples \
+  --root /mnt/tier2/project/p200177/DE_371/datasets/datasets_SMHI/npy_intep/samples \
   --windows 0-6,6-12,12-18,18-24,24-30,30-36,36-42 \
   --start-date 2023-01-01T00:00:00Z \
   --end-date 2024-12-31T00:00:00Z \
@@ -60,7 +60,7 @@ python correct_merged.py --file-list sequences-test5.csv --root  merged_samples 
 
 python make_sequences.py \
   --labels labels.csv \
-  --root /home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep/samples \
+  --root /mnt/tier2/project/p200177/DE_371/datasets/datasets_SMHI/npy_intep/samples \
   --windows 0-6 \
   --members 0,1 \
   --start-date 2023-01-01T00:00:00Z \
@@ -79,7 +79,7 @@ The dataset below is for only testing the dataset since I in mistake shuffeled t
 
 python make_sequences.py \
   --labels labels.csv \
-  --root /home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep/samples \
+  --root /mnt/tier2/project/p200177/DE_371/datasets/datasets_SMHI/npy_intep/samples \
   --windows 0-6,6-12,12-18,18-24,24-30,30-36,36-42 \
   --start-date 2025-01-01T00:00:00Z \
   --end-date 2025-03-31T00:00:00Z \
@@ -94,7 +94,7 @@ python make_sequences.py \
 ```
 
 ### Files used for test
-All files are in dir `/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep`
+All files are in dir `/mnt/tier2/project/p200177/DE_371/datasets/datasets_SMHI/npy_intep`
 
 ```
 sequences-for-stats-test.csv
@@ -119,7 +119,7 @@ module load Python/3.12.3-GCCcore-13.3.0
 python3 -m mlflow server \
   --host localhost\
   --port 5000 \
-  --backend-store-uri file:/home/users/u101329/p200177_t2/u101329/_mlruns  
+  --backend-store-uri file:/mnt/tier2/project/p200177/u101329/_mlruns  
 ```
 - to fowrard the port
 
@@ -158,10 +158,10 @@ module load Apptainer/1.3.6-GCCcore-13.3.0
 module load git
 
 
-DATA_DIR=/home/users/u101329/p200177_t1_hp/u101329/npy_interp
-ROOT_DIR=/home/users/u101329/p200177_t2/u101329/diffusion-interp
+DATA_DIR=/mnt/tier1/project/p200177/u101329/npy_interp
+ROOT_DIR=/mnt/tier2/project/p200177/u101329/diffusion-interp
 WORK_DIR=$ROOT_DIR/_work
-MLFLOW_DIR=/home/users/u101329/p200177_t2/u101329/_mlruns_apptainer
+MLFLOW_DIR=/mnt/tier2/project/p200177/u101329/_mlruns_apptainer
 SIF_FILE=../containers/container.sif 
 apptainer exec \
     --nv \

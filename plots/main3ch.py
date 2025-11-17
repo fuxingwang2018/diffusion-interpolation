@@ -62,7 +62,7 @@ def get_info(stations_file, latlon_file):
 # ---------------- config ----------------
 
 normalizer = Normalizer(
-    stats_npz="/home/users/u101329/p200177_t1_hp/u101329/npy_interp/sequences-stats-2023-2024.npz",
+    stats_npz="/mnt/tier1/project/p200177/u101329/npy_interp/sequences-stats-2023-2024.npz",
     mode="symrange",
     average_key="global_mean",
     norm_const=0.95,
@@ -70,9 +70,9 @@ normalizer = Normalizer(
 )
 
 print("start")
-latlon_file = "/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep/latlon.npy"
-obs_file = "/home/users/u101329/p200177_t2/DE_371/datasets/datasets_SMHI/npy_intep/2024-m10-m12-obs.csv"
-stations_file = "/home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/stations.csv"
+latlon_file = "/mnt/tier2/project/p200177/DE_371/datasets/datasets_SMHI/npy_intep/latlon.npy"
+obs_file = "/mnt/tier2/project/p200177/DE_371/datasets/datasets_SMHI/npy_intep/2024-m10-m12-obs.csv"
+stations_file = "/mnt/tier2/project/p200177/u101329/diffusion-interp/_saved/stations.csv"
 
 # Load unique stations & grid info
 interp_info, valid_stations, lat2d, lon2d = get_info(stations_file, latlon_file)
@@ -91,11 +91,11 @@ def parse_window(win: str) -> range:
 for member in range(0, 1):
     merged_big = None
     print(f"processing member {member}")
-    samples_file = f"/home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/new_attempt/m{member}_npz_files.txt"
+    samples_file = f"/mnt/tier2/project/p200177/u101329/diffusion-interp/_saved/new_attempt/m{member}_npz_files.txt"
 
     for p in iter_filelist(samples_file):
         # ----- load sample -----
-        npz_path = os.path.join("/home/users/u101329/p200177_t1_hp/u101329/results/samples_utv_2024_2", p)
+        npz_path = os.path.join("/mnt/tier1/project/p200177/u101329/results/samples_utv_2024_2", p)
         pred, meta, gt = load_data_meta_from_npz(npz_path)  # pred: (T,C,H,W), gt: (T+2,C,H,W) or similar
 
         window = meta["window"]
@@ -205,6 +205,6 @@ for member in range(0, 1):
                 merged_big = pd.concat([merged_big, merged], ignore_index=True)
 
     # write once per member
-    out_csv = f"/home/users/u101329/p200177_t2/u101329/diffusion-interp/_saved/new_attempt/all_in_one_m{member}-v3.csv"
+    out_csv = f"/mnt/tier2/project/p200177/u101329/diffusion-interp/_saved/new_attempt/all_in_one_m{member}-v3.csv"
     merged_big.to_csv(out_csv, index=False)
     print(f"[saved] {out_csv}")
