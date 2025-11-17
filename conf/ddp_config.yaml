@@ -1,13 +1,13 @@
-_data_dir: ${oc.env:DATA_DIR,/mnt/tier1/project/p200177/u101329/npy_interp/}
+_data_dir: ${oc.env:DATA_DIR,/mnt/tier1/project/p200177/smhi/npy_interp/}
 _root_dir: ${oc.env:ROOT_DIR,/mnt/tier2/project/p200177/u101329/diffusion-interp}
-_mlflow_dir: ${oc.env:MLFLOW_DIR,/mnt/tier2/project/p200177/u101329/_mlruns}
+_mlflow_dir: ${oc.env:MLFLOW_DIR,/mnt/tier1/project/p200177/smhi/mlruns}
 _run_name: "ddpm-npy-ruvt-ft-${now:%Y%m%d_%H%M%S}"
 _work_dir: ${oc.env:WORK_DIR,${_root_dir}/_work/${_run_name}}
 _checkpoints_dir: ${_work_dir}/checkpoints
 
 
 fine_tune: true # if true then will only load the dictionary  
-resume_from_ckpt: file  # none, file, best or last
+resume_from_ckpt: none  # none, file, best or last
 ckpt_path: /mnt/tier2/project/p200177/u101329/diffusion-interp/_work/ddpm-npy-ruvt-20250929_134920/checkpoints/last.ckpt
  #/mnt/tier2/project/p200177/u101329/diffusion-interp/_work/ddpm-npy-uvt-20250928_200514/checkpoints/last.ckpt
 #/mnt/tier2/project/p200177/u101329/diffusion-interp/_work/ddpm-npy-1-year_20250928_171402/checkpoints/last.ckpt 

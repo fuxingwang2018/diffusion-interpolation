@@ -17,7 +17,7 @@ module load git/2.45.1-GCCcore-13.3.0
 module load Python/3.12.3-GCCcore-13.3.0 
  
 # activate your venv
-source .venv/bin/activate
+source /mnt/tier2/project/p200177/u101329/diffusion-interp/.venv/bin/activate
 
 
 
