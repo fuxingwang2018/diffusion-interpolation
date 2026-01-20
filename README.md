@@ -1,62 +1,31 @@
 # Difuusion Interpolation
 
-## Experiments
-- See the file `docs/experiments/README.md`
-## Interactive node
+## Environment on MiluXina
 ```bash
+# start an interactive session
 salloc -A p200177  -p gpu --qos default -N 1 -t 1:00:00
-````
-## Generate the dataset
 
-```bash
-# Sample labels.csv
-#Name,Importance,PosX,PosY,Date,LeadTime,Member
-# 2023/01/01/00/2023010100_lt00_mem000.npy,1,256,256,2023-01-01T00:00:00Z,0,0
-# 2023/01/01/00/2023010100_lt00_mem001.npy,1,256,256,2023-01-01T00:00:00Z,0,1
-# 2023/01/01/00/2023010100_lt00_mem002.npy,1,256,256,2023-01-01T00:00:00Z,0,2
-# 2023/01/01/00/2023010100_lt00_mem003.npy,1,256,256,2023-01-01T00:00:00Z,0,3
-# 2023/01/01/00/2023010100_lt00_mem004.npy,1,256,256,2023-01-01T00:00:00Z,0,4
-
+#Create the environment
 module load env/release/2024.1
-module load Python/3.12.3-GCCcore-13.3.0
-python tools/get_sequences_csv.py --labels labels.csv --windows 0-6,6-12,12-18 --members 0,1,2 --start-date 2023-01-01T00:00:00Z --end-date 2023-03-01T00:00:00Z --out  sequences-test.csv --extra-out  sequences-for-stats-test.csv --no-verify-fs
+module load Python/3.12.3-GCCcore-13.3.0 
+python -m venv .venv 
+source .venv/bin/activate
+pip3 install --upgrade pip
+pip3 install -r requirements.txt
 
-python tools/calc_stats.py --file-list sequences-for-stats-test.csv  --root-dir samples --out sequences-stats-test.npz
+# prepare mlflow directory 
+# --backend-store-uri: The same value set to _mlflow_dir in the config files 
+python3 -m mlflow server \
+  --host localhost\
+  --port 5000 \
+  --backend-store-uri file:path/to/the/directory
 
-## Actual test
-python tools/get_sequences_csv.py --labels labels.csv --windows 0-6,6-12,12-18 --start-date 2023-01-01T00:00:00Z --end-date 2023-12-31T00:00:00Z --out  sequences-test2.csv --extra-out  sequences-for-stats-test2.csv --no-verify-fs
-python tools/calc_stats.py --file-list sequences-for-stats-test2.csv  --root-dir samples --out sequences-stats-test2.npz
+# submit the job 
+sbatch submit_meps_ddp.sh
+```
 
-## Actual test
-python tools/get_sequences_csv.py --labels labels.csv --windows 0-6,6-12,12-18 --start-date 2023-01-01T00:00:00Z --end-date 2025-12-31T00:00:00Z --out  sequences-test3.csv --extra-out  sequences-for-stats-test3.csv --no-verify-fs
-python tools/calc_stats.py --file-list sequences-for-stats-test3.csv  --root-dir samples --out sequences-stats-test3.npz
-
-
-
-# 
-python tools/get_sequences_csv.py --labels labels.csv --windows 0-6,6-12,12-18,18-24,24-30,30-36 --start-date 2023-01-01T00:00:00Z --end-date 2024-03-31T00:00:00Z --out  sequences-test3.csv --extra-out  sequences-for-stats-test3.csv --no-verify-fs
-python tools/calc_stats.py --file-list sequences-for-stats-test3.csv  --root-dir samples --out sequences-stats-test3.npz
-
-
-
-python make_sequences.py \
-  --labels labels.csv \
-  --root /mnt/tier2/project/p200177/DE_371/datasets/datasets_SMHI/npy_intep/samples \
-  --windows 0-6,6-12,12-18,18-24,24-30,30-36,36-42 \
-  --start-date 2023-01-01T00:00:00Z \
-  --end-date 2024-12-31T00:00:00Z \
-  --merge-root merged_samples \
-  --out sequences-2023-2024.csv  \
-  --extra-out sequences-for-stats-2023-2024.csv \
-  --no-verify-fs
-
-python make_stats.py --file-list sequences-for-stats-2023-2024.csv --root-dir merged_samples --out sequences-stats-2023-2024.npz
-
-python correct_merged.py --file-list sequences-test5.csv --root  merged_samples --out  sequences-test5-corrected.csv
-
-
-
-
+## Prepare input data from MEPS npy 
+```bash
 
 python make_sequences.py \
   --labels labels.csv \
@@ -75,113 +44,8 @@ python correct_merged.py  sequences-reduced-test.csv  --root  merged_samples --o
 python make_stats.py --file-list sequences-for-stats-reduced-test.csv --root  merged_samples --out sequences-stats-reduced-test.npz
 
 
-The dataset below is for only testing the dataset since I in mistake shuffeled the original one and thus I will consider 2025/01/01 for the real test 
-
-python make_sequences.py \
-  --labels labels.csv \
-  --root /mnt/tier2/project/p200177/DE_371/datasets/datasets_SMHI/npy_intep/samples \
-  --windows 0-6,6-12,12-18,18-24,24-30,30-36,36-42 \
-  --start-date 2025-01-01T00:00:00Z \
-  --end-date 2025-03-31T00:00:00Z \
-  --merge-root merged_samples  \
-  --out sequences-2025.csv  \
-  --extra-out sequences-for-stats-2025.csv 
-
- # Use the same stats as before 
-
-
-
 ```
 
-### Files used for test
-All files are in dir `/mnt/tier2/project/p200177/DE_371/datasets/datasets_SMHI/npy_intep`
+## Sample 
 
-```
-sequences-for-stats-test.csv
-labels.csv
-sequences-test.csv
-sequences-stats-test.npz
-samples/
-```
-
-
-## Build the image
-```bash
-module load Apptainer/1.3.6-GCCcore-13.3.0
-apptainer build --fakeroot ../containers/container.sif  container.def
-```
-
-## Start MLFlow
-
-```bash
-module load Python/3.12.3-GCCcore-13.3.0
-#pip3 intall --user mlflow
-python3 -m mlflow server \
-  --host localhost\
-  --port 5000 \
-  --backend-store-uri file:/mnt/tier2/project/p200177/u101329/_mlruns  
-```
-- to fowrard the port
-
-```bash
-NODE=mel0293 # the interactive node
-ssh  $NODE -L 5000:localhost:5000
-```
-
-
-## To not use the container
-- Create the environment
-```bash
-module load env/release/2024.1
-module load Python/3.12.3-GCCcore-13.3.0 
-python -m venv .venv 
-source .venv/bin/activate
-pip3 install --upgrade pip
-pip3 install -r requirements.txt
-``` 
-
-- To run the training
-it will automatically link the config file (check the script)
-```bash
-sbatch submit_meps_ddp.sh
-```
-
-## Development training run
- 
-```bash
-
-salloc -A p200177  -p gpu   --qos default -N 1 -t 5:00:00
-
-
-module load env/release/2024.1
-module load Apptainer/1.3.6-GCCcore-13.3.0
-module load git
-
-
-DATA_DIR=/mnt/tier1/project/p200177/u101329/npy_interp
-ROOT_DIR=/mnt/tier2/project/p200177/u101329/diffusion-interp
-WORK_DIR=$ROOT_DIR/_work
-MLFLOW_DIR=/mnt/tier2/project/p200177/u101329/_mlruns_apptainer
-SIF_FILE=../containers/container.sif 
-apptainer exec \
-    --nv \
-    --containall \
-    --bind .:/code \
-    --bind $DATA_DIR:$DATA_DIR \
-    --bind $ROOT_DIR:$ROOT_DIR \
-    --bind $WORK_DIR:$WORK_DIR \
-    --bind $MLFLOW_DIR:$MLFLOW_DIR \
-    $SIF_FILE \
-    bash -c "
-        set -e
-        cd /code
-        export DATA_DIR=$DATA_DIR
-        export ROOT_DIR=$ROOT_DIR
-        export WORK_DIR=$WORK_DIR
-        export MLFLOW_DIR=$MLFLOW_DIR
-        python train.py -cn apptainer_config_test.yaml  #test_meps_numpy_datamodule.py #
-    "
-```
-
-## generate samples
-- see the file folder [generate](generate/README.md) 
+- read the example  [here](generate/README.md)
