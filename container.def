@@ -28,6 +28,7 @@ From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
 %environment
     export PATH=/usr/local/bin:$PATH
     export PYTHONUNBUFFERED=1
+    
 
 %runscript
     echo "Testing Python Version"

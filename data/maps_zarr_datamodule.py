@@ -61,7 +61,11 @@ class Normalizer(nn.Module):
 
         # Helper to ensure 1D shape (C,)
         def to_1d(t):
-            return t.view(-1) if t is not None else None
+            if t is None:
+                return None
+            if not torch.is_tensor(t):
+                t = torch.as_tensor(t)
+            return t.view(-1)
 
         mean = to_1d(mean)
         std = to_1d(std)
@@ -102,7 +106,7 @@ class Normalizer(nn.Module):
         
         # Case: (..., C, H, W) -> C is at index -3
         if x.ndim >= 3 and x.shape[-3] == C:
-             return stat.view(1, -1, 1, 1)
+            return stat.view(1, -1, 1, 1)
              
         # Case: (..., C, Cell) -> C is at index -2
         # Default fall-through for safety
@@ -152,18 +156,23 @@ class MEPSZarrDataset(Dataset):
     Dataset returns RAW data tensors. 
     Normalization should be applied by the calling loop/model on GPU.
     """
+
+ 
+
     def __init__(
         self,
         dataset_path: str,
         indices: Sequence[int],
-        window_size: int = 7,
-        variable_indices: Sequence[int] = (0, 1, 2, 3),
-        dtype: Literal["float32", "float16"] = "float32",
+        window_size: int,
+        variable_indices: Sequence[int],
+        dtype: Literal["float32", "float16"],
+        data_reshape: Tuple[int,int] | None, 
+        normalizer: Normalizer
     ) -> None:
         super().__init__()
         self.indices = indices 
         self.window_size = window_size
-        assert self.window_size < 3, f"Window size must be >= 3, got {self.window_size}"
+        assert self.window_size >= 3, f"Window size must be >= 3, got {self.window_size}"
 
         self.var_idx = list(variable_indices)
         
@@ -172,6 +181,8 @@ class MEPSZarrDataset(Dataset):
             "float16": torch.float16,
             "bfloat16": torch.bfloat16,
         }
+        self.data_reshape = data_reshape
+        self.normalizer = normalizer
         self.out_dtype = self.dtype_map[dtype]
         
         # Lazy open with xarray
@@ -195,6 +206,9 @@ class MEPSZarrDataset(Dataset):
             ensemble=0 
         ).values # Shape: (Window, C, Cell)
         
+        if self.data_reshape is not None:
+            data_block = data_block.reshape(*data_block.shape[:-1],*self.data_reshape)
+
         # 3. Create Tensors directly (No CPU Normalization loop)
         # We split Boundary (x) and Internal (y)
         # x: First and Last frame
@@ -219,7 +233,7 @@ class MEPSZarrDataset(Dataset):
             "date": str(self.ds.dates.values[start_t]) if 'dates' in self.ds else ""
         }
 
-        return x_t, y_t, meta
+        return self.normalizer.forward(x_t) , self.normalizer.forward(y_t), meta
 
 # ============================================================
 # Lightning DataModule
@@ -242,6 +256,7 @@ class MEPSZarrDataModule(L.LightningDataModule):
         num_workers: int = 2,
         pin_memory: bool = True,
         shuffle_train: bool = True,
+        data_reshape: Optional[Tuple[int,int]] | None = None,
         # Split Config
         split: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -267,7 +282,7 @@ class MEPSZarrDataModule(L.LightningDataModule):
         self.num_workers = num_workers
         self.pin_memory = pin_memory
         self.shuffle_train = shuffle_train
-        
+        self.data_reshape = data_reshape
         self.split_cfg = SplitConfig(**split) if split is not None else SplitConfig()
 
         self.train_ds: Optional[Dataset] = None
@@ -342,9 +357,10 @@ class MEPSZarrDataModule(L.LightningDataModule):
         total_time = ds.sizes['time']
         
         # 1. Resolve Variable Names to Indices
-        all_var_names = list(ds['variable'].values)
+        all_var_names = ds.attrs["variables"]
         if self.variables is None:
             self.var_indices = list(range(len(all_var_names)))
+   
         else:
             try:
                 self.var_indices = [all_var_names.index(str(v)) for v in self.variables]
@@ -361,19 +377,21 @@ class MEPSZarrDataModule(L.LightningDataModule):
                 std = ds['stdev'].values
                 minimum= ds['minimum'].values
                 maximum= ds['maximum'].values
+                self.normalizer = Normalizer(
+                    mode=self.normalize_mode,
+                    mean=mean[self.var_indices],
+                    std=std[self.var_indices],
+                    minimum=minimum[self.var_indices],
+                    maximum=maximum[self.var_indices],
+                    norm_const=self.norm_const,
+                )
+                                
             except KeyError as e:
                 rank_zero_info(f"Warning: Could not load stat {e} from Zarr. Normalization might fail.")
+                self.normalizer = Normalizer(mode="none")
 
-        self.normalizer = Normalizer(
-            mode=self.normalize_mode,
-            mean=mean,
-            std=std,
-            minimum=minimum,
-            maximum=maximum,
-            norm_const=self.norm_const,
-            channel_indices=self.var_indices 
-        )
 
+      
         # 3. Split Indices
         train_idx, val_idx, test_idx = self._get_split_indices(total_time)
         
@@ -382,15 +400,21 @@ class MEPSZarrDataModule(L.LightningDataModule):
         rank_zero_info(f"Val samples:   {len(val_idx)}")
         rank_zero_info(f"Test samples:  {len(test_idx)}")
 
+        if self.data_reshape is not None:
+            rank_zero_info(f"Data will be reshaped to: {self.data_reshape}")
+          
         # 4. Create Datasets
         self.train_ds = MEPSZarrDataset(
-            self.dataset_path, train_idx, self.window_size, self.var_indices, self.normalizer, self.dtype
+            self.dataset_path, train_idx, self.window_size, self.var_indices, self.dtype
+            ,self.data_reshape, self.normalizer
         )
         self.val_ds = MEPSZarrDataset(
-            self.dataset_path, val_idx, self.window_size, self.var_indices, self.normalizer, self.dtype
+            self.dataset_path, val_idx, self.window_size, self.var_indices, self.dtype
+            ,self.data_reshape, self.normalizer
         )
         self.test_ds = MEPSZarrDataset(
-            self.dataset_path, test_idx, self.window_size, self.var_indices, self.normalizer, self.dtype
+            self.dataset_path, test_idx, self.window_size, self.var_indices, self.dtype
+            ,self.data_reshape, self.normalizer
         )
 
     def train_dataloader(self) -> DataLoader:
@@ -404,3 +428,12 @@ class MEPSZarrDataModule(L.LightningDataModule):
     def test_dataloader(self) -> DataLoader:
         return DataLoader(self.test_ds, batch_size=self.batch_size, shuffle=False, 
                           num_workers=self.num_workers, pin_memory=self.pin_memory)
+
+    #TODO: to be used later
+    # def get_normalizer(self) -> nn.Module:
+    #     if hasattr(self, "normalizer"):
+    #         return self.normalizer
+    #     raise RuntimeError(
+    #         "Normalizer is not initialized. "
+    #         "Call setup() before accessing the normalizer."
+    #     )

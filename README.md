@@ -45,6 +45,88 @@ python make_stats.py --file-list sequences-for-stats-reduced-test.csv --root  me
 
 
 ```
+## Build apptainer the image
+```bash
+module load Apptainer/1.3.6-GCCcore-13.3.0
+apptainer build --fakeroot ../containers/container.sif  container.def
+```
+
+## Test Data module
+ 
+```bash
+
+ 
+
+module load env/release/2024.1
+module load Apptainer/1.3.6-GCCcore-13.3.0
+module load git
+source /mnt/tier2/project/p200177/u101329/diffusion-interp/.venv/bin/activate
+
+
+ROOT_DIR=/mnt/tier2/project/p200177/u101329/diffusion-interp-phase2
+DATA_BIND=/project/home/p200177/u101329/DE371_bis/MEPS_subdomain/
+WORK_DIR=$ROOT_DIR/_work
+MLFLOW_DIR=/mnt/tier2/project/p200177/u101329/_mlruns_apptainer
+SIF_FILE=../containers/container.sif 
+apptainer exec \
+    --containall \
+    --bind .:/code \
+    --bind $DATA_BIND:$DATA_BIND \
+    --bind $ROOT_DIR:$ROOT_DIR \
+    --bind $WORK_DIR:$WORK_DIR \
+    --bind $MLFLOW_DIR:$MLFLOW_DIR \
+    $SIF_FILE \
+    bash -c "
+        set -e
+        cd /code
+        export ROOT_DIR=$ROOT_DIR
+        export WORK_DIR=$WORK_DIR
+        export MLFLOW_DIR=$MLFLOW_DIR
+        export HYDRA_FULL_ERROR=1
+        export PYTHONPATH=".:$PYTHONPATH" 
+        python test_meps_zarr_datamodule.py -cn  ddp_zarr_config.yaml 
+    "
+```
+
+
+## Train on interactive
+ 
+```bash
+
+ 
+
+module load env/release/2024.1
+module load Apptainer/1.3.6-GCCcore-13.3.0
+module load git
+source /mnt/tier2/project/p200177/u101329/diffusion-interp/.venv/bin/activate
+
+
+ROOT_DIR=/mnt/tier2/project/p200177/u101329/diffusion-interp-phase2
+DATA_BIND=/project/home/p200177/u101329/DE371_bis/MEPS_subdomain/
+WORK_DIR=$ROOT_DIR/_work
+MLFLOW_DIR=/mnt/tier2/project/p200177/u101329/_mlruns_apptainer
+SIF_FILE=../containers/container.sif 
+apptainer exec \
+    --nv \
+    --containall \
+    --bind .:/code \
+    --bind $DATA_BIND:$DATA_BIND \
+    --bind $ROOT_DIR:$ROOT_DIR \
+    --bind $WORK_DIR:$WORK_DIR \
+    --bind $MLFLOW_DIR:$MLFLOW_DIR \
+    $SIF_FILE \
+    bash -c "
+        set -e
+        cd /code
+        export ROOT_DIR=$ROOT_DIR
+        export WORK_DIR=$WORK_DIR
+        export MLFLOW_DIR=$MLFLOW_DIR
+        export HYDRA_FULL_ERROR=1
+        export PYTHONPATH=".:$PYTHONPATH" 
+        python3 -u train.py -cn ddp_zarr_config.yaml
+    "
+```
+
 
 ## Sample 
 

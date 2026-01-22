@@ -158,8 +158,7 @@ module load Apptainer/1.3.6-GCCcore-13.3.0
 module load git
 
 
-DATA_DIR=/mnt/tier1/project/p200177/u101329/npy_interp
-ROOT_DIR=/mnt/tier2/project/p200177/u101329/diffusion-interp
+ROOT_DIR=/mnt/tier2/project/p200177/u101329/diffusion-interp-phase2
 WORK_DIR=$ROOT_DIR/_work
 MLFLOW_DIR=/mnt/tier2/project/p200177/u101329/_mlruns_apptainer
 SIF_FILE=../containers/container.sif 
@@ -179,9 +178,46 @@ apptainer exec \
         export ROOT_DIR=$ROOT_DIR
         export WORK_DIR=$WORK_DIR
         export MLFLOW_DIR=$MLFLOW_DIR
-        python train.py -cn apptainer_config_test.yaml  #test_meps_numpy_datamodule.py #
+        python test_meps_numpy_datamodule.py # train.py -cn apptainer_config_test.yaml  #test_meps_numpy_datamodule.py #
     "
 ```
+
+
+## Test Data module
+ 
+```bash
+
+ 
+
+module load env/release/2024.1
+module load Apptainer/1.3.6-GCCcore-13.3.0
+module load git
+
+
+ROOT_DIR=/mnt/tier2/project/p200177/u101329/diffusion-interp-phase2
+WORK_DIR=$ROOT_DIR/_work
+MLFLOW_DIR=/mnt/tier2/project/p200177/u101329/_mlruns_apptainer
+SIF_FILE=../containers/container.sif 
+apptainer exec \
+    --containall \
+    --bind .:/code \
+    --bind $DATA_DIR:$DATA_DIR \
+    --bind $ROOT_DIR:$ROOT_DIR \
+    --bind $WORK_DIR:$WORK_DIR \
+    --bind $MLFLOW_DIR:$MLFLOW_DIR \
+    $SIF_FILE \
+    bash -c "
+        set -e
+        cd /code
+        export DATA_DIR=$DATA_DIR
+        export ROOT_DIR=$ROOT_DIR
+        export WORK_DIR=$WORK_DIR
+        export MLFLOW_DIR=$MLFLOW_DIR
+        python test_meps_numpy_datamodule.py # train.py -cn apptainer_config_test.yaml  #test_meps_numpy_datamodule.py #
+    "
+```
+
+
 
 ## generate samples
 - see the file folder [generate](generate/README.md) 
