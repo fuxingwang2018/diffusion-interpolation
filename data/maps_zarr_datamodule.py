@@ -2,14 +2,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
+ 
 
 import numpy as np
-import torch
+
 import xarray as xr
 import lightning as L
 from torch.utils.data import Dataset, DataLoader
 from lightning.pytorch.utilities.rank_zero import rank_zero_info
-
+import torch
 import torch.nn as nn
  
  
@@ -41,12 +42,7 @@ class SplitConfig:
 # ============================================================
 # Normalizer (Optimized for GPU)
 # ============================================================
-
 class Normalizer(nn.Module):
-    """
-    Torch Module for normalization. 
-    Stores stats as buffers to allow seamless move to GPU with the model.
-    """
     def __init__(
         self,
         mode: Literal["none", "zscore", "symrange"],
@@ -54,67 +50,98 @@ class Normalizer(nn.Module):
         std: Optional[torch.Tensor] = None,
         minimum: Optional[torch.Tensor] = None,
         maximum: Optional[torch.Tensor] = None,
-        norm_const:  Optional[torch.Tensor] = None,
+        norm_const: Optional[float] = None,
     ) -> None:
         super().__init__()
         self.mode = mode
-        
-        
+
         if mode == "none":
+            self.register_buffer("dummy", torch.tensor(0.))
             return
 
-        # Register buffers so they move to device (GPU) with the module
+        # Helper to ensure 1D shape (C,)
+        def to_1d(t):
+            return t.view(-1) if t is not None else None
+
+        mean = to_1d(mean)
+        std = to_1d(std)
+        minimum = to_1d(minimum)
+        maximum = to_1d(maximum)
+
         if mode == "zscore":
-            assert mean is not None and std is not None, "zscore normalization requires mean and std"
-            self.register_buffer("mean", mean.view(-1, 1)
-            self.register_buffer("std", std.view(-1, 1))
+            assert mean is not None and std is not None
+            self.register_buffer("mean", mean)
             # Avoid div by zero
-            self.std[self.std == 0] = 1.0
-            
+            std = torch.where(std == 0, torch.ones_like(std), std)
+            self.register_buffer("std", std)
+
         elif mode == "symrange":
-            assert mean is not None and minimum is not None and maximum is not None and norm_const is not None, \
-                "symrange normalization requires mean, min, max, and norm_const"
-            self.register_buffer("mean", mean.view(-1, 1))
-            self.register_buffer("minimum",  maximum.view(-1, 1))
-            self.register_buffer("maximum", minimum.view(-1, 1))
-            self.register_buffer("norm_const", norm_const.view(-1, 1))
-            # Pre-calculate denominator to save compute during forward
+            assert mean is not None and minimum is not None and maximum is not None and norm_const is not None
+            self.register_buffer("mean", mean)
+            self.register_buffer("minimum", minimum)
+            self.register_buffer("maximum", maximum)
+            self.register_buffer("norm_const", torch.tensor(norm_const))
+            
+            # Calculate denom (keep it 1D)
             denom = torch.maximum(torch.abs(self.minimum - self.mean), torch.abs(self.maximum - self.mean))
-            denom[denom == 0] = 1.0
+            denom = torch.where(denom == 0, torch.ones_like(denom), denom)
             self.register_buffer("denom", denom)
 
+    def _get_stats_view(self, x: torch.Tensor, stat: torch.Tensor) -> torch.Tensor:
+        """
+        Reshapes stat (C,) to (1, ..., 1, C, 1, ..., 1) to match x.
+        Handling:
+        (..., C, Cell) -> view(..., C, 1)
+        (..., C, H, W) -> view(..., C, 1, 1)
+        """
+        # Determine number of spatial dims.
+        # Heuristic: Check if the 3rd-to-last dim matches C (implies Image: ..., C, H, W)
+        # Otherwise assume Sequence (..., C, Cell)
+        
+        C = stat.shape[0]
+        
+        # Case: (..., C, H, W) -> C is at index -3
+        if x.ndim >= 3 and x.shape[-3] == C:
+             return stat.view(1, -1, 1, 1)
+             
+        # Case: (..., C, Cell) -> C is at index -2
+        # Default fall-through for safety
+        return stat.view(1, -1, 1)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Input x: (..., C, Cell) or (..., C, H, W)
-        """
         if self.mode == "none":
             return x
-        
-        # PyTorch broadcasting handles the shapes automatically
-        # x shape: (Batch, Time, C, Cell)
-        # stat shape: (C, 1) -> broadcasts to (1, 1, C, 1) effectively
-        
+
+        # Reshape stats to align with x
+        mean = self._get_stats_view(x, self.mean)
+
         if self.mode == "zscore":
-            return (x - self.mean) / self.std
+            std = self._get_stats_view(x, self.std)
+            return (x - mean) / std
+
+        if self.mode == "symrange":
+            denom = self._get_stats_view(x, self.denom)
+            return self.norm_const * (x - mean) / denom
+
+        return x
+
+    def denormalize(self, x: torch.Tensor) -> torch.Tensor:
+        if self.mode == "none":
+            return x
+            
+        mean = self._get_stats_view(x, self.mean)
+            
+        if self.mode == "zscore":
+            std = self._get_stats_view(x, self.std)
+            return (x * std) + mean
             
         if self.mode == "symrange":
-            return self.norm_const * (x - self.mean) / self.denom
+            denom = self._get_stats_view(x, self.denom)
+            return (x * denom / self.norm_const) + mean
             
         return x
     
-    def denormalize(self, x: torch.Tensor) -> torch.Tensor:
-        """Inverse operation for metrics/visualization"""
-        if self.mode == "none":
-            return x
-            
-        if self.mode == "zscore":
-            return (x * self.std) + self.mean
-            
-        if self.mode == "symrange":
-            return (x * self.denom / self.norm_const) + self.mean
-            
-        return x
-
+   
 
 # ============================================================
 # Dataset (Lean & Fast)
@@ -136,6 +163,8 @@ class MEPSZarrDataset(Dataset):
         super().__init__()
         self.indices = indices 
         self.window_size = window_size
+        assert self.window_size < 3, f"Window size must be >= 3, got {self.window_size}"
+
         self.var_idx = list(variable_indices)
         
         self.dtype_map = {
@@ -146,7 +175,7 @@ class MEPSZarrDataset(Dataset):
         self.out_dtype = self.dtype_map[dtype]
         
         # Lazy open with xarray
-        self.ds = xr.open_dataset(dataset_path, engine='zarr', chunks='auto')
+        self.ds = xr.open_dataset(dataset_path, engine='zarr', zarr_format=2 )
         self.data_var = self.ds['data'] # Keep direct reference for speed
 
     def __len__(self) -> int:
@@ -171,8 +200,6 @@ class MEPSZarrDataset(Dataset):
         # x: First and Last frame
         # y: Intermediate frames
         
-        if self.window_size < 3:
-             raise ValueError(f"Window size must be >= 3, got {self.window_size}")
 
         # Construct x and y
         # Note: np.stack creates a copy, which is fine here.
@@ -311,7 +338,7 @@ class MEPSZarrDataModule(L.LightningDataModule):
             return train_idx, val_idx, test_idx
     def setup(self, stage: Optional[str] = None) -> None:
         # Open Zarr to read Metadata
-        ds = xr.open_dataset(self.dataset_path, engine='zarr')
+        ds = xr.open_dataset(self.dataset_path, engine='zarr', zarr_format=2 )
         total_time = ds.sizes['time']
         
         # 1. Resolve Variable Names to Indices
@@ -330,17 +357,19 @@ class MEPSZarrDataModule(L.LightningDataModule):
         stats_dict = {}
         if self.normalize_mode != "none":
             try:
-                stats_dict['mean'] = ds['mean'].values 
-                stats_dict['std'] = ds['stdev'].values
-                stats_dict['mean'] = ds['mean'].values 
-                stats_dict['minimum'] = ds['minimum'].values
-                stats_dict['maximum'] = ds['maximum'].values
+                mean = ds['mean'].values 
+                std = ds['stdev'].values
+                minimum= ds['minimum'].values
+                maximum= ds['maximum'].values
             except KeyError as e:
                 rank_zero_info(f"Warning: Could not load stat {e} from Zarr. Normalization might fail.")
 
         self.normalizer = Normalizer(
             mode=self.normalize_mode,
-            stats_dict=stats_dict,
+            mean=mean,
+            std=std,
+            minimum=minimum,
+            maximum=maximum,
             norm_const=self.norm_const,
             channel_indices=self.var_indices 
         )
