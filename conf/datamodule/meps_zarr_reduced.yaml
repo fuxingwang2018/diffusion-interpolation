@@ -1,0 +1,34 @@
+_target_: data.maps_zarr_datamodule.MEPSZarrDataModule
+
+dataset_path: /project/home/p200177/u101329/DE371_bis/MEPS_subdomain/aifs-meps-2.5km-2020-2023-1h-v2_SMHI_subdomain_reduced.zarr
+
+# Window Config
+# window_size: 7 -> Stride will be 6
+# Sample 1: Indices 0,1,2,3,4,5,6
+# Sample 2: Indices 6,7,8,9,10,11,12
+window_size: 6
+
+# Variable Selection by Name (strings)
+variables: ['10u', '10v', '2t']
+# Or subset: ['2t', 'tp']
+
+# Normalization
+normalize: symrange   # none | zscore | symrange
+norm_const: 0.95
+
+# Loader
+batch_size: 8
+num_workers: 4
+pin_memory: true
+shuffle_train: true
+dtype: float32
+
+# Split per samples  
+split: 
+    strategy: sample
+    train: 20
+    validation: 2
+    test: 2
+    skip: 1  # skpi after each 
+
+ 
