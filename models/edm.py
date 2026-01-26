@@ -2,7 +2,7 @@
 import torch
 from typing import Tuple, Set, Optional
 
-from .base import DiffusionBase, fourier_embed
+from .diffusion_base import DiffusionBase, fourier_embed
 from samplers import SamplerBase
 
 

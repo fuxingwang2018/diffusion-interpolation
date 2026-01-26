@@ -167,7 +167,7 @@ class MEPSZarrDataset(Dataset):
         variable_indices: Sequence[int],
         dtype: Literal["float32", "float16"],
         data_reshape: Tuple[int,int] | None, 
-        normalizer: Normalizer
+        normalizer: Normalizer,
     ) -> None:
         super().__init__()
         self.indices = indices 
@@ -203,9 +203,8 @@ class MEPSZarrDataset(Dataset):
         data_block = self.data_var.isel(
             time=slice(start_t, end_t),
             variable=self.var_idx,
-            ensemble=0 
+            ensemble=0
         ).values # Shape: (Window, C, Cell)
-        
         if self.data_reshape is not None:
             data_block = data_block.reshape(*data_block.shape[:-1],*self.data_reshape)
 

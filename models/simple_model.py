@@ -113,7 +113,8 @@ class SimpleModel(L.LightningModule):
             x, y = batch
         cond, target = self._pack_xy(x, y)
         loss = self._compute_loss(cond, target)
-        self.log(f"{stage}_loss", loss, prog_bar=True, on_step=(stage == "train"), on_epoch=True, sync_dist=True)
+        bs = x.size(0)
+        self.log(f"{stage}_loss", loss, prog_bar=True, on_step=(stage == "train"), on_epoch=True, sync_dist=True, batch_size=bs)
         return loss
 
     # ---------- Lightning hooks ----------
